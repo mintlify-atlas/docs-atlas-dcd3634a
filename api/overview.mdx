@@ -1,7 +1,7 @@
 ---
-title: "PitchPro REST API — Endpoints and Conventions"
+title: "PitchPro REST API — Endpoints, Auth, and Conventions"
 sidebarTitle: "Overview"
-description: "Overview of PitchPro's REST API: base URL, authentication, response format, status codes, and all available endpoints."
+description: "Overview of PitchPro's REST API: base URL, JWT authentication, response envelope format, HTTP status codes, and the full 11-endpoint index."
 ---
 
 PitchPro's backend is an **Express + TypeScript** REST API that exposes all court and reservation management functionality over HTTP. Every response is **JSON**. Protected routes (`/api/canchas` and `/api/reservas`) require a valid JWT **Bearer token** issued at login. An interactive **Swagger UI** is bundled at `/docs` so you can explore and test every endpoint directly from the browser.

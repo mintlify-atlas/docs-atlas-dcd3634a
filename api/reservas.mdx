@@ -1,5 +1,5 @@
 ---
-title: "Reservations API — GET and POST /api/reservas"
+title: "Reservations API — Schedule and List /api/reservas"
 sidebarTitle: "Reservas"
 description: "REST endpoints for listing and creating court reservations (reservas) in PitchPro. Includes conflict detection for overlapping time slots."
 ---
@@ -172,11 +172,30 @@ curl -X POST http://localhost:8000/api/reservas \
   The newly inserted reservation returned from `RETURNING *`. Includes the auto-assigned `id`, `estado` (defaulted to `pendiente`), and `created_at`.
 </ResponseField>
 
+### Response — 400 Bad Request (Zod validation failure)
+
+Returned when the body fails `CrearReservaSchema` Zod parsing. Unlike `POST /api/canchas`, the `errores` array contains **raw Zod `ZodIssue` objects** (not remapped to `{campo, problema}`):
+
+```json
+{
+  "ok": false,
+  "mensaje": "Error de validación",
+  "errores": [
+    {
+      "code": "invalid_string",
+      "validation": "regex",
+      "message": "La fecha debe tener el formato YYYY-MM-DD (ej: 2025-06-15)",
+      "path": ["fecha"]
+    }
+  ]
+}
+```
+
 ### Error codes
 
 | Code | Meaning |
 |------|---------|
-| `400` | Request body failed Zod validation — `{ ok: false, mensaje: "Error de validación", errores: [...] }` |
+| `400` | Request body failed Zod validation — `{ ok: false, mensaje: "Error de validación", errores: [<ZodIssue>, ...] }` |
 | `401` | Missing or invalid Bearer token |
 | `404` | The referenced `cancha_id` does not exist — `{ ok: false, mensaje: "Cancha con ID <id> no encontrada" }` |
 | `409` | Time slot conflict — `{ ok: false, mensaje: "La cancha ya se encuentra reservada de HH:MM a HH:MM" }` |

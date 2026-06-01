@@ -206,7 +206,9 @@ Two guard components protect routes based on authentication state:
 
 ```ts
 // redirect target when unauthenticated
-const href = `/auth/jwt/login?returnTo=${window.location.pathname}`;
+const loginPath = loginPaths[method]; // '/auth/jwt/login'
+const searchParams = new URLSearchParams({ returnTo: window.location.pathname }).toString();
+const href = `${loginPath}?${searchParams}`;
 router.replace(href);
 ```
 

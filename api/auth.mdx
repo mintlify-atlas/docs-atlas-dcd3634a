@@ -1,7 +1,7 @@
 ---
-title: "Authentication Endpoints — POST /api/auth"
+title: "PitchPro Auth Endpoints — Register, Login, Refresh, Logout"
 sidebarTitle: "Auth Endpoints"
-description: "REST endpoints for user registration, login, access token refresh, logout, and getting the current user in PitchPro."
+description: "Reference for all five /api/auth endpoints: register, login, token refresh, logout, and current-user profile. Includes validation rules and error codes."
 ---
 
 The `/api/auth` prefix groups all authentication endpoints. Requests to these routes do **not** require a JWT token — with the single exception of `GET /api/auth/me`, which validates the caller's access token to return their profile.
@@ -15,11 +15,11 @@ Creates a new user account. The request body is validated by `express-validator`
 ### Request body
 
 <ParamField body="nombre" type="string" required>
-  Display name for the user. Maximum 100 characters.
+  Display name for the user. Must be non-empty (validated by `express-validator` `notEmpty()`).
 </ParamField>
 
 <ParamField body="email" type="string" required>
-  Must be a valid email address (validated by `express-validator` `isEmail()`). If the address is already registered a `400` is returned.
+  Must be a valid email address (validated by `express-validator` `isEmail()`). If the address is already registered, a `400` is returned.
 </ParamField>
 
 <ParamField body="password" type="string" required>

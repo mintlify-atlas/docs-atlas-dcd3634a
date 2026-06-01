@@ -1,7 +1,7 @@
 ---
-title: "PitchPro System Architecture and Data Model"
+title: "PitchPro Architecture: Schema, JWT Flow, and Module Layout"
 sidebarTitle: "Architecture"
-description: "Explore how PitchPro's Express backend and React frontend interact, the PostgreSQL schema, and the JWT authentication flow."
+description: "Deep dive into PitchPro's PostgreSQL schema, JWT dual-token auth flow, and the controller–service–repository module structure."
 ---
 
 PitchPro follows a classic **two-tier architecture**: a stateless REST API (the backend) and a Single Page Application (the frontend) that communicate exclusively over HTTP/JSON. The Express server at port `8000` owns all business logic and data persistence, while the React SPA at port `5173` handles rendering and user interaction. Every request from the frontend carries a JWT Bearer token in the `Authorization` header; the backend's `verifyToken` middleware validates it before any route handler executes. Neither tier shares code or process space — they are independently deployable projects.

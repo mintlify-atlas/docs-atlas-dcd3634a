@@ -1,10 +1,10 @@
 ---
 title: "PitchPro Dashboard: Courts, Reservations, and Stats"
 sidebarTitle: "Dashboard"
-description: "Tour the PitchPro React dashboard: live system health stats, courts table, reservations list, and dialog-based CRUD for managing courts and bookings."
+description: "Tour the PitchPro React dashboard: system health stats, courts table, reservations list, and dialog-based CRUD for managing courts and bookings."
 ---
 
-The PitchPro dashboard is the primary management interface for the ArquiMarket sports court platform. It provides real-time system health monitoring, a full inventory view of available courts (canchas), and a paginated log of all reservations — all backed by live API data fetched through TanStack Query. Every data-mutation action (creating a court, booking a slot) is performed through focused dialog components that invalidate the relevant query cache on success so the tables reflect the latest state without a manual refresh.
+The PitchPro dashboard is the primary management interface for the ArquiMarket sports court platform. It provides system health monitoring, a full inventory view of available courts (canchas), and a paginated log of all reservations — all backed by API data fetched on demand through TanStack Query. Every data-mutation action (creating a court, booking a slot) is performed through focused dialog components that invalidate the relevant query cache on success so the tables reflect the latest state without a manual refresh.
 
 ---
 
@@ -26,7 +26,7 @@ The dashboard is split into three route-level views, all protected by `AuthGuard
     - `useGetReservas()` → `GET /api/reservas` — populates `ReservasRecent` and the "Reservas Activas" stat.
     - `useHealth()` → `GET /health` — drives the "System Health" stat card badge (`Healthy` / `Pending`).
 
-    The three stats are computed dynamically from live data:
+    The three stats are computed dynamically from fetched API data:
 
     ```tsx
     const dynamicStats = [
@@ -36,6 +36,8 @@ The dashboard is split into three route-level views, all protected by `AuthGuard
         value: isHealthy ? 'Operativo' : 'Verificando...',
         badge: isHealthy ? 'Healthy' : 'Pending',
         badgeColor: isHealthy ? 'success' : 'warning',
+        iconColor: isHealthy ? '#106e00' : '#b28900',
+        iconBg: isHealthy ? 'rgba(57,255,20,0.12)' : 'rgba(255,193,7,0.12)',
       },
       {
         icon: 'mdi:tennis',
@@ -43,6 +45,8 @@ The dashboard is split into three route-level views, all protected by `AuthGuard
         value: canchas.length.toString(),
         badge: 'API: Canchas',
         badgeColor: 'default',
+        iconColor: '#505f76',
+        iconBg: 'rgba(206,222,249,0.4)',
       },
       {
         icon: 'solar:calendar-date-bold',
@@ -50,6 +54,8 @@ The dashboard is split into three route-level views, all protected by `AuthGuard
         value: reservas.length.toString(),
         badge: 'API: Reservas',
         badgeColor: 'default',
+        iconColor: '#565e74',
+        iconBg: 'rgba(218,226,253,0.4)',
       },
     ];
     ```
@@ -316,7 +322,7 @@ The card renders with a subtle hover lift animation (`translateY(-2px)`) via MUI
 ```
 
 <Note>
-  `StatCard` accepts `any` typed props internally — the TypeScript shape above reflects actual usage in `dashboard-view.tsx`. Provide all six props to avoid undefined rendering artifacts.
+  `StatCard` accepts `any` typed props internally — the TypeScript shape above reflects actual usage in `dashboard-view.tsx`. Provide all seven props to avoid undefined rendering artifacts.
 </Note>
 
 ---

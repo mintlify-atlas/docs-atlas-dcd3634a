@@ -1,7 +1,7 @@
 ---
-title: "Authenticating Requests to the PitchPro API"
+title: "Authenticating with the PitchPro REST API — JWT Guide"
 sidebarTitle: "Authentication"
-description: "How to obtain a JWT access token via login and pass it in requests to protected PitchPro API endpoints. Covers token refresh and logout."
+description: "Step-by-step guide to registering, logging in, refreshing access tokens, and logging out of PitchPro using JWT Bearer authentication."
 ---
 
 Protected endpoints (`/api/canchas` and `/api/reservas`) require a **JWT access token**. Obtain one by registering an account and logging in, then include it in the `Authorization` header of every subsequent request. Access tokens are short-lived (15 minutes); use the refresh token to get a new one without re-entering credentials.
