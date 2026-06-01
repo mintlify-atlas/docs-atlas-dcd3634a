@@ -1,0 +1,172 @@
+---
+title: "Frontend Setup: React Dashboard for PitchPro"
+sidebarTitle: "Setup"
+description: "Install and run the PitchPro React dashboard. Built with Vite, MUI v5, TanStack Query, and Axios. Connects to the Express backend API."
+---
+
+The PitchPro frontend is a React 18 single-page application built with Vite and TypeScript. It provides a fully-featured admin dashboard for managing sports courts (canchas) and reservations, connecting to the Express backend API over HTTP. The UI is built with MUI v5, data fetching is handled by TanStack Query v5, and all HTTP calls go through a shared Axios instance configured in `src/utils/axios.ts`.
+
+## Prerequisites
+
+- **Node.js 18+** and **npm** or **yarn**
+- The PitchPro **Express backend API** running locally at `http://localhost:8000` (see [Backend Setup](/backend/setup))
+
+---
+
+## Installation
+
+<Steps>
+  <Step title="Navigate to the frontend directory">
+    The React app lives in `starter-vite-ts/` inside the monorepo root:
+
+    ```bash
+    cd starter-vite-ts
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    <CodeGroup>
+      ```bash npm
+      npm install
+      ```
+
+      ```bash yarn
+      yarn install
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Create the environment file">
+    Create a `.env` file at the root of `starter-vite-ts/`:
+
+    ```bash .env
+    # Base URL for the PitchPro Express API
+    VITE_HOST_API=http://localhost:8000
+
+    # Optional: CDN or S3 base URL for static assets (leave empty for local dev)
+    VITE_ASSETS_API=
+    ```
+
+    <Note>
+      `VITE_HOST_API` is read by `src/config-global.ts` as `HOST_API` and passed directly to the Axios instance as its `baseURL`. Every API call in the app is relative to this value.
+    </Note>
+  </Step>
+
+  <Step title="Start the development server">
+    <CodeGroup>
+      ```bash npm
+      npm run dev
+      ```
+
+      ```bash yarn
+      yarn dev
+      ```
+    </CodeGroup>
+
+    The dashboard will be available at **http://localhost:5173**. Hot-module replacement (HMR) is enabled via Vite's dev server.
+  </Step>
+</Steps>
+
+---
+
+## Available Scripts
+
+| Script | Command | Description |
+|---|---|---|
+| `dev` | `vite` | Start the Vite development server with HMR on port 5173 |
+| `build` | `tsc && vite build` | Type-check with TypeScript then produce an optimized `dist/` bundle |
+| `start` | `vite preview` | Locally preview the production build from `dist/` |
+| `lint` | `eslint "src/**/*.{js,jsx,ts,tsx}"` | Run ESLint across all source files |
+| `dev:host` | `vite --host` | Start the dev server exposed on the local network (useful for mobile testing) |
+
+---
+
+## Key Dependencies
+
+| Package | Version | Purpose |
+|---|---|---|
+| `react` + `react-dom` | `^18.2.0` | Core React framework for building the SPA |
+| `react-router-dom` | `^6.20.1` | Client-side routing (React Router v6) |
+| `@mui/material` | `^5.14.20` | MUI v5 component library — all layout, tables, dialogs, and forms |
+| `@tanstack/react-query` | `^5.100.14` | Server state management — data fetching, caching, and invalidation |
+| `axios` | `^1.6.2` | HTTP client; a shared instance with interceptors lives in `src/utils/axios.ts` |
+| `react-hook-form` | `^7.48.2` | Performant form state management for login, register, and CRUD dialogs |
+| `yup` + `@hookform/resolvers` | `^1.3.2` / `^3.3.2` | Schema-based validation integrated with React Hook Form |
+| `framer-motion` | `^10.16.16` | Declarative animations used throughout the dashboard UI |
+| `@iconify/react` | `^4.1.1` | Icon component backed by the Solar icon set |
+
+---
+
+## Connecting to a Custom Backend
+
+The Axios instance is created in `src/utils/axios.ts` using `HOST_API` from `src/config-global.ts`:
+
+```ts src/utils/axios.ts
+import axios from 'axios';
+import { HOST_API } from 'src/config-global';
+
+const axiosInstance = axios.create({ baseURL: HOST_API });
+```
+
+`HOST_API` is read directly from the `VITE_HOST_API` environment variable:
+
+```ts src/config-global.ts
+export const HOST_API = import.meta.env.VITE_HOST_API;
+```
+
+To point the dashboard at a different backend — for example, a staging server — simply update `.env`:
+
+```bash .env
+VITE_HOST_API=https://api.staging.pitchpro.example.com
+```
+
+Then restart the dev server. All API modules (`src/api/canchas.ts`, `src/api/reservas.ts`) and the auth interceptor will automatically use the new base URL.
+
+<Warning>
+  Never commit a `.env` file containing production credentials. Use `.env.local` (git-ignored by Vite's default `.gitignore`) for secrets.
+</Warning>
+
+---
+
+## Build for Production
+
+```bash
+npm run build
+```
+
+TypeScript is compiled first (`tsc`), then Vite bundles the app into the `dist/` directory with code splitting and asset hashing.
+
+**Deploying to Vercel (recommended for SPAs)**
+
+Because PitchPro uses client-side routing, all paths must be rewritten to `index.html`. Add a `vercel.json` at the repo root (or `starter-vite-ts/`) with a catch-all rewrite:
+
+```json vercel.json
+{
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}
+```
+
+Alternatively, add a `_redirects` file inside `starter-vite-ts/public/`:
+
+```
+/*  /index.html  200
+```
+
+This file is copied to `dist/` verbatim by Vite during the build step.
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Auth Flow" icon="lock" href="/frontend/auth-flow">
+    How the JWT auth context, token storage, Axios interceptor, and route guards work.
+  </Card>
+  <Card title="Dashboard" icon="chart-bar" href="/frontend/dashboard">
+    Tour the courts table, reservations list, stat cards, and CRUD dialogs.
+  </Card>
+  <Card title="Environment Variables" icon="gear" href="/deployment/environment-variables">
+    Full reference for all VITE_ variables used by the frontend.
+  </Card>
+  <Card title="API Overview" icon="code" href="/api/overview">
+    REST endpoints exposed by the Express backend the dashboard consumes.
+  </Card>
+</CardGroup>

@@ -1,0 +1,234 @@
+---
+title: "Reservations API — GET and POST /api/reservas"
+sidebarTitle: "Reservas"
+description: "REST endpoints for listing and creating court reservations (reservas) in PitchPro. Includes conflict detection for overlapping time slots."
+---
+
+The `/api/reservas` endpoints manage bookings (*reservas*) against sports courts. Both routes are protected by the `verifyToken` middleware and require a valid JWT Bearer token. The `POST` endpoint includes **server-side overlap detection** — before inserting a new reservation it calls `reservasRepository.existeSolapamiento()`, which uses PostgreSQL's `OVERLAPS` operator to detect time-range conflicts on the same court and date. If a conflict is found, the API returns `409` rather than allowing a double-booking.
+
+---
+
+## GET /api/reservas
+
+Returns all reservations ordered by date and start time (`ORDER BY r.fecha ASC, r.hora_inicio ASC`). The query uses a `JOIN` on the `canchas` table, so each reservation object includes `cancha_nombre` alongside the foreign key `cancha_id`.
+
+### Authentication
+
+Requires `Authorization: Bearer <accessToken>`.
+
+### Example request
+
+```bash
+curl http://localhost:8000/api/reservas \
+  -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIs...'
+```
+
+### Response — 200 OK
+
+```json
+{
+  "ok": true,
+  "data": [
+    {
+      "id": 1,
+      "cancha_id": 1,
+      "cancha_nombre": "Sintética Central",
+      "fecha": "2025-06-15",
+      "hora_inicio": "09:00:00",
+      "hora_fin": "11:00:00",
+      "nombre_cliente": "Juan Pérez",
+      "telefono": "3001234567",
+      "estado": "pendiente",
+      "origen": "interfaz",
+      "created_at": "2025-06-01T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+<ResponseField name="ok" type="boolean">
+  Always `true` on a successful response.
+</ResponseField>
+
+<ResponseField name="data" type="Reserva[]">
+  <Expandable title="Reserva object fields">
+    <ResponseField name="id" type="number">
+      Auto-incremented primary key of the reservation.
+    </ResponseField>
+    <ResponseField name="cancha_id" type="number">
+      Foreign key referencing `canchas.id` — the booked court.
+    </ResponseField>
+    <ResponseField name="cancha_nombre" type="string">
+      The court's display name, joined from the `canchas` table. This field is **not** stored in `reservas` — it is resolved at query time via `JOIN canchas c ON c.id = r.cancha_id`.
+    </ResponseField>
+    <ResponseField name="fecha" type="string">
+      Reservation date as a `DATE` string in `YYYY-MM-DD` format (e.g. `"2025-06-15"`).
+    </ResponseField>
+    <ResponseField name="hora_inicio" type="string">
+      Start time as a PostgreSQL `TIME` string (e.g. `"09:00:00"`).
+    </ResponseField>
+    <ResponseField name="hora_fin" type="string">
+      End time as a PostgreSQL `TIME` string (e.g. `"11:00:00"`).
+    </ResponseField>
+    <ResponseField name="nombre_cliente" type="string">
+      Full name of the customer who made the booking.
+    </ResponseField>
+    <ResponseField name="telefono" type="string">
+      Contact phone number for the customer.
+    </ResponseField>
+    <ResponseField name="estado" type="string">
+      Current reservation status. One of `pendiente`, `confirmada`, or `cancelada`. Enforced by a DB `CHECK` constraint.
+    </ResponseField>
+    <ResponseField name="origen" type="string">
+      Channel through which the reservation was created: `whatsapp` or `interfaz`.
+    </ResponseField>
+    <ResponseField name="created_at" type="string">
+      ISO 8601 UTC timestamp of when the reservation was inserted.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error codes
+
+| Code | Meaning |
+|------|---------|
+| `401` | Missing or invalid Bearer token |
+| `500` | Internal server error — `{ ok: false, mensaje: "Error al obtener las reservas" }` |
+
+---
+
+## POST /api/reservas
+
+Creates a new court reservation. The request body is validated with the Zod schema `CrearReservaSchema` from `reservas.types.ts`. After validation the service checks that the referenced court exists, then verifies there are no overlapping non-cancelled reservations before inserting.
+
+### Authentication
+
+Requires `Authorization: Bearer <accessToken>`.
+
+### Request body
+
+<ParamField body="cancha_id" type="integer" required>
+  The ID of the court to book. Must be a positive integer. The API will return `404` if no court with this ID exists.
+</ParamField>
+
+<ParamField body="fecha" type="string" required>
+  Reservation date in `YYYY-MM-DD` format (e.g. `"2025-06-15"`). Validated with the regex `/^\d{4}-\d{2}-\d{2}$/`.
+</ParamField>
+
+<ParamField body="hora_inicio" type="string" required>
+  Start time in `HH:MM` format (e.g. `"09:00"`). Validated with the regex `/^\d{2}:\d{2}$/`.
+</ParamField>
+
+<ParamField body="hora_fin" type="string" required>
+  End time in `HH:MM` format (e.g. `"11:00"`). Validated with the regex `/^\d{2}:\d{2}$/`. Must be after `hora_inicio` — enforced by the database `CHECK` constraint `hora_valida` (`hora_fin > hora_inicio`).
+</ParamField>
+
+<ParamField body="nombre_cliente" type="string" required>
+  Full name of the customer. Must be at least 1 character.
+</ParamField>
+
+<ParamField body="telefono" type="string" required>
+  Customer contact number as a string. Must be at least 7 characters.
+</ParamField>
+
+<ParamField body="origen" type="string">
+  Channel that originated the booking. Accepted values: `"whatsapp"` or `"interfaz"`. Defaults to `"interfaz"` if omitted.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST http://localhost:8000/api/reservas \
+  -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIs...' \
+  -H 'Content-Type: application/json' \
+  -d '{"cancha_id": 1, "fecha": "2025-06-15", "hora_inicio": "09:00", "hora_fin": "11:00", "nombre_cliente": "Juan Pérez", "telefono": "3001234567", "origen": "interfaz"}'
+```
+
+### Response — 201 Created
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": 5,
+    "cancha_id": 1,
+    "fecha": "2025-06-15",
+    "hora_inicio": "09:00:00",
+    "hora_fin": "11:00:00",
+    "nombre_cliente": "Juan Pérez",
+    "telefono": "3001234567",
+    "estado": "pendiente",
+    "origen": "interfaz",
+    "created_at": "2025-06-14T20:00:00.000Z"
+  }
+}
+```
+
+<ResponseField name="ok" type="boolean">
+  Always `true` on successful creation.
+</ResponseField>
+
+<ResponseField name="data" type="Reserva">
+  The newly inserted reservation returned from `RETURNING *`. Includes the auto-assigned `id`, `estado` (defaulted to `pendiente`), and `created_at`.
+</ResponseField>
+
+### Error codes
+
+| Code | Meaning |
+|------|---------|
+| `400` | Request body failed Zod validation — `{ ok: false, mensaje: "Error de validación", errores: [...] }` |
+| `401` | Missing or invalid Bearer token |
+| `404` | The referenced `cancha_id` does not exist — `{ ok: false, mensaje: "Cancha con ID <id> no encontrada" }` |
+| `409` | Time slot conflict — `{ ok: false, mensaje: "La cancha ya se encuentra reservada de HH:MM a HH:MM" }` |
+| `500` | Internal server error |
+
+---
+
+## Conflict detection
+
+<Note>
+  Before inserting, the API calls `reservasRepository.existeSolapamiento(cancha_id, fecha, hora_inicio, hora_fin)`. This runs the following PostgreSQL query:
+
+  ```sql
+  SELECT id FROM reservas
+  WHERE cancha_id = $1
+    AND fecha = $2
+    AND estado != 'cancelada'
+    AND (hora_inicio, hora_fin) OVERLAPS ($3::time, $4::time)
+  ```
+
+  PostgreSQL's `OVERLAPS` operator returns `true` when two time ranges share any moment, so even a partial overlap (e.g. a new booking from 10:00–12:00 against an existing 09:00–11:00 booking) is detected and rejected. Reservations with `estado = 'cancelada'` are excluded from the check and do not block new bookings.
+</Note>
+
+---
+
+## Reservation states
+
+Reservations are created with `estado = 'pendiente'` by default (the `INSERT` statement omits the `estado` column, so the database default applies). The `estado` column has a `CHECK` constraint that allows exactly three values:
+
+| Estado | Meaning |
+|--------|---------|
+| `pendiente` | Booking received, awaiting confirmation. **Default on creation.** |
+| `confirmada` | Booking has been confirmed by staff or the system. |
+| `cancelada` | Booking has been cancelled. Excluded from overlap checks, freeing the slot. |
+
+<Warning>
+  There is currently no API endpoint to update `estado`. State transitions must be performed directly in the database or via a future `PATCH /api/reservas/:id` endpoint.
+</Warning>
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Courts API" icon="futbol" href="api/canchas">
+    Manage the courts that can be reserved, including listing, fetching by ID, and creation.
+  </Card>
+  <Card title="API Overview" icon="map" href="api/overview">
+    All PitchPro endpoints at a glance with base URL, auth format, and error conventions.
+  </Card>
+</CardGroup>
+
+<CardGroup cols={2}>
+  <Card title="Authentication Guide" icon="key" href="api/authentication">
+    Learn how to obtain and refresh Bearer tokens used on all reservation requests.
+  </Card>
+</CardGroup>

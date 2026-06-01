@@ -1,0 +1,337 @@
+---
+title: "PitchPro Dashboard: Courts, Reservations, and Stats"
+sidebarTitle: "Dashboard"
+description: "Tour the PitchPro React dashboard: live system health stats, courts table, reservations list, and dialog-based CRUD for managing courts and bookings."
+---
+
+The PitchPro dashboard is the primary management interface for the ArquiMarket sports court platform. It provides real-time system health monitoring, a full inventory view of available courts (canchas), and a paginated log of all reservations — all backed by live API data fetched through TanStack Query. Every data-mutation action (creating a court, booking a slot) is performed through focused dialog components that invalidate the relevant query cache on success so the tables reflect the latest state without a manual refresh.
+
+---
+
+## Dashboard Views
+
+The dashboard is split into three route-level views, all protected by `AuthGuard` and rendered inside `DashboardLayout`. Navigate between them using the sidebar, which is configured in `src/layouts/dashboard/config-navigation.tsx`.
+
+<Tabs>
+  <Tab title="Overview — /dashboard">
+    **`src/sections/pitchpro/dashboard-view.tsx`** — the landing page after login.
+
+    **Layout:**
+    - A row of three **StatCards** spanning the full width (system health, total courts, active reservations).
+    - An 8-column **CanchasTable** (paginated MUI table with a "Nueva Cancha" button).
+    - A 4-column sidebar with **ReservasRecent** (scrollable list of bookings) and **QuickActions**.
+
+    **Data sources:**
+    - `useGetCanchas()` → `GET /api/canchas` — populates `CanchasTable` and the "Total Canchas" stat.
+    - `useGetReservas()` → `GET /api/reservas` — populates `ReservasRecent` and the "Reservas Activas" stat.
+    - `useHealth()` → `GET /health` — drives the "System Health" stat card badge (`Healthy` / `Pending`).
+
+    The three stats are computed dynamically from live data:
+
+    ```tsx
+    const dynamicStats = [
+      {
+        icon: 'solar:shield-check-bold',
+        label: 'SYSTEM HEALTH (/health)',
+        value: isHealthy ? 'Operativo' : 'Verificando...',
+        badge: isHealthy ? 'Healthy' : 'Pending',
+        badgeColor: isHealthy ? 'success' : 'warning',
+      },
+      {
+        icon: 'mdi:tennis',
+        label: 'TOTAL CANCHAS',
+        value: canchas.length.toString(),
+        badge: 'API: Canchas',
+        badgeColor: 'default',
+      },
+      {
+        icon: 'solar:calendar-date-bold',
+        label: 'RESERVAS ACTIVAS',
+        value: reservas.length.toString(),
+        badge: 'API: Reservas',
+        badgeColor: 'default',
+      },
+    ];
+    ```
+  </Tab>
+
+  <Tab title="Canchas — /dashboard/canchas">
+    **`src/sections/pitchpro/canchas-view.tsx`** — full inventory management for sports courts.
+
+    Renders a single `CanchasTable` component (`src/features/dashboard/components/CanchasTable.tsx`) that includes:
+
+    - **Paginated MUI table** with rows per page options of 5, 10, or 25. Default page size is 5.
+    - **Columns:** ID · NOMBRE · DESCRIPCIÓN · PRECIO /H · ESTADO · ACCIONES
+    - The **ESTADO** cell renders a MUI `Label` chip: green `DISPONIBLE` when `activa: true`, red `INACTIVA` when `activa: false`.
+    - The **PRECIO /H** cell formats the value with `toLocaleString()` (e.g. `$30,000`).
+    - A **"Nueva Cancha"** button in the table header opens `CreateCanchaDialog`.
+
+    ```tsx
+    // Table columns
+    ['ID', 'NOMBRE', 'DESCRIPCIÓN', 'PRECIO /H', 'ESTADO', 'ACCIONES']
+    ```
+  </Tab>
+
+  <Tab title="Reservas — /dashboard/reservas">
+    **`src/sections/pitchpro/reservas-view.tsx`** — full reservation control panel.
+
+    Layout:
+    - An 8-column **ReservasRecent** list — paginated cards (4 per page) with client name, court name, date/time range, and status badge. Clicking a row selects it.
+    - A 4-column **ReservaDetailPanel** — shows all fields of the selected reservation; displays an empty state when nothing is selected.
+    - A **"Nueva Reserva"** button in the page header opens `CreateReservaDialog`.
+
+    **Selection state** is managed locally with `useState<Reserva | null>(null)`. Selecting a row updates `selectedReserva`, which is passed to `ReservaDetailPanel` and highlighted in `ReservasRecent`:
+
+    ```tsx
+    const [selectedReserva, setSelectedReserva] = useState<Reserva | null>(null);
+
+    <ReservasRecent
+      reservas={reservas}
+      selectedId={selectedReserva?.id}
+      onSelect={setSelectedReserva}
+    />
+    <ReservaDetailPanel reserva={selectedReserva} />
+    ```
+
+    The detail panel displays: reservation ID, status badge (confirmada / pendiente / cancelled), client name, phone, court name, date, time range (formatted to `HH:MM`), origin channel, and creation timestamp.
+  </Tab>
+</Tabs>
+
+---
+
+## Data Fetching Hooks
+
+All server state is managed through custom TanStack Query hooks in `src/hooks/`.
+
+### Courts hooks — `src/hooks/useCanchas.ts`
+
+```ts
+// Fetch all courts
+export const useGetCanchas = () =>
+  useQuery({ queryKey: ['canchas'], queryFn: canchasApi.list });
+
+// Fetch a single court by ID
+export const useGetCancha = (id: number | string) =>
+  useQuery({
+    queryKey: ['canchas', id],
+    queryFn: () => canchasApi.details(id),
+    enabled: !!id,
+  });
+
+// Create a new court (mutation)
+export const useCreateCancha = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateCanchaPayload) => canchasApi.create(data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['canchas'] }),
+  });
+};
+
+// System health check
+export const useHealth = () =>
+  useQuery({ queryKey: ['health'], queryFn: canchasApi.health });
+```
+
+### Reservations hooks — `src/hooks/useReservas.ts`
+
+```ts
+// Fetch all reservations
+export const useGetReservas = () =>
+  useQuery({ queryKey: ['reservas'], queryFn: reservasApi.list });
+
+// Create a new reservation (mutation)
+export const useCreateReserva = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateReservaPayload) => reservasApi.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['reservas'] });
+      queryClient.invalidateQueries({ queryKey: ['canchas'] }); // refresh availability
+    },
+  });
+};
+```
+
+### TypeScript types
+
+The canonical `Cancha` and `Reserva` types are defined in the API modules and used throughout the dashboard:
+
+```ts src/api/canchas.ts
+export type Cancha = {
+  id: number;
+  nombre: string;
+  descripcion: string;
+  precio_hora: number;
+  activa: boolean;
+  created_at: string;
+};
+
+export type CreateCanchaPayload = Omit<Cancha, 'id' | 'created_at'>;
+```
+
+```ts src/api/reservas.ts
+export type Reserva = {
+  id: number;
+  cancha_id: number;
+  cancha_nombre: string;   // denormalized for display
+  fecha: string;           // ISO date string, e.g. "2024-07-15"
+  hora_inicio: string;     // "HH:MM:SS" — sliced to "HH:MM" for display
+  hora_fin: string;        // "HH:MM:SS" — sliced to "HH:MM" for display
+  nombre_cliente: string;
+  telefono: string;
+  estado: string;          // "confirmada" | "pendiente" | "cancelada"
+  origen: string;          // channel: "admin" | "web" | "telefono"
+  created_at: string;
+};
+
+export type CreateReservaPayload =
+  Omit<Reserva, 'id' | 'created_at' | 'cancha_nombre' | 'estado'>;
+```
+
+---
+
+## Creating a Court
+
+<Steps>
+  <Step title="Open the dialog">
+    Click the **"Nueva Cancha"** button — found in the `CanchasTable` header on both the Overview and Canchas views. The `CreateCanchaDialog` modal opens.
+  </Step>
+
+  <Step title="Fill in the court details">
+    | Field | Type | Validation |
+    |---|---|---|
+    | `nombre` | Text | Required |
+    | `descripcion` | Textarea | Required |
+    | `precio_hora` | Number | Required, min `0`, step `1000` |
+    | `activa` | Toggle (Switch) | Defaults to `true` |
+
+    Form state is managed by React Hook Form. Validation errors appear inline below each field.
+  </Step>
+
+  <Step title="Submit the form">
+    Click **Crear**. The dialog calls `useCreateCancha().mutateAsync()` which sends:
+
+    ```http
+    POST /api/canchas
+    Content-Type: application/json
+    Authorization: Bearer <accessToken>
+
+    {
+      "nombre": "Cancha Norte",
+      "descripcion": "Cancha de fútbol sala cubierta",
+      "precio_hora": 50000,
+      "activa": true
+    }
+    ```
+
+    A loading spinner replaces the submit button while the request is in flight.
+  </Step>
+
+  <Step title="Table refreshes automatically">
+    On success, `onSuccess` calls `queryClient.invalidateQueries({ queryKey: ['canchas'] })`. TanStack Query refetches `GET /api/canchas` in the background and the table updates without any manual refresh. If the request fails, an error `Alert` is displayed inside the dialog.
+  </Step>
+</Steps>
+
+---
+
+## Creating a Reservation
+
+<Steps>
+  <Step title="Open the dialog">
+    Click the **"Nueva Reserva"** button in the Reservas view header. The `CreateReservaDialog` modal opens and pre-loads the list of available courts from `useGetCanchas()`.
+  </Step>
+
+  <Step title="Fill in the reservation details">
+    | Field | Type | Validation |
+    |---|---|---|
+    | `cancha_id` | Select (dropdown) | Required — choose from active courts |
+    | `fecha` | Date (`YYYY-MM-DD`) | Required |
+    | `hora_inicio` | Time (`HH:MM`) | Required |
+    | `hora_fin` | Time (`HH:MM`) | Required |
+    | `nombre_cliente` | Text | Required |
+    | `telefono` | Text | Required |
+    | `origen` | Select | `admin` · `web` · `telefono` (default: `admin`) |
+
+    `hora_inicio` and `hora_fin` are rendered side-by-side in a row for compact entry.
+  </Step>
+
+  <Step title="Submit the form">
+    Click **Crear**. The dialog calls `useCreateReserva().mutateAsync()` which sends:
+
+    ```http
+    POST /api/reservas
+    Content-Type: application/json
+    Authorization: Bearer <accessToken>
+
+    {
+      "cancha_id": 3,
+      "fecha": "2024-08-20",
+      "hora_inicio": "10:00",
+      "hora_fin": "12:00",
+      "nombre_cliente": "Ana Gómez",
+      "telefono": "3001234567",
+      "origen": "web"
+    }
+    ```
+  </Step>
+
+  <Step title="Handle the response">
+    - **Success (201):** The dialog closes and the `onCreated` callback sets the newly created reservation as the selected row in `ReservaDetailPanel`. Both `['reservas']` and `['canchas']` query keys are invalidated so all lists refresh.
+    - **Conflict (409):** If the time slot is already booked on that court, the backend returns a 409. The error message from the response body is displayed in a red `Alert` inside the dialog — the dialog stays open so the user can adjust the time.
+  </Step>
+</Steps>
+
+---
+
+## StatCard Component
+
+`src/features/dashboard/components/StatCard.tsx` is the metric tile used in the Overview row. All props are passed explicitly from the parent view:
+
+```ts
+type StatCardProps = {
+  icon: string;                               // Iconify icon name, e.g. 'solar:shield-check-bold'
+  label: string;                              // Uppercase caption, e.g. 'TOTAL CANCHAS'
+  value: string;                              // Primary metric display value
+  badge: string;                              // Small pill label, e.g. 'API: Canchas'
+  badgeColor: 'success' | 'warning' | 'default'; // MUI Label color variant
+  iconColor: string;                          // CSS color for the icon
+  iconBg: string;                             // CSS background for the icon container
+};
+```
+
+The card renders with a subtle hover lift animation (`translateY(-2px)`) via MUI's `sx` prop. The `badge` chip sits in the top-right corner using a MUI `Label` component with a `soft` variant.
+
+**Example — the System Health stat:**
+
+```tsx
+<StatCard
+  icon="solar:shield-check-bold"
+  label="SYSTEM HEALTH (/health)"
+  value={isHealthy ? 'Operativo' : 'Verificando...'}
+  badge={isHealthy ? 'Healthy' : 'Pending'}
+  badgeColor={isHealthy ? 'success' : 'warning'}
+  iconColor={isHealthy ? '#106e00' : '#b28900'}
+  iconBg={isHealthy ? 'rgba(57,255,20,0.12)' : 'rgba(255,193,7,0.12)'}
+/>
+```
+
+<Note>
+  `StatCard` accepts `any` typed props internally — the TypeScript shape above reflects actual usage in `dashboard-view.tsx`. Provide all six props to avoid undefined rendering artifacts.
+</Note>
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Auth Flow" icon="lock" href="/frontend/auth-flow">
+    JWT context, token storage, Axios interceptor, and route guards.
+  </Card>
+  <Card title="Canchas API" icon="tennis-ball" href="/api/canchas">
+    GET /api/canchas, POST /api/canchas, and GET /api/canchas/:id reference.
+  </Card>
+  <Card title="Reservas API" icon="calendar" href="/api/reservas">
+    GET /api/reservas and POST /api/reservas reference, including 409 conflict handling.
+  </Card>
+  <Card title="Frontend Setup" icon="wrench" href="/frontend/setup">
+    Installation, environment variables, and available npm scripts.
+  </Card>
+</CardGroup>

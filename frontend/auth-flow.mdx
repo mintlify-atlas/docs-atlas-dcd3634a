@@ -1,0 +1,298 @@
+---
+title: "Authentication Flow in the PitchPro React Dashboard"
+sidebarTitle: "Auth Flow"
+description: "How PitchPro's React frontend manages JWT auth: AuthProvider context, login/register/logout, token storage, Axios interceptor, and route guards."
+---
+
+The PitchPro frontend implements JWT-based authentication entirely on the client side. An `AuthProvider` React context wraps the application, holding the current user object and exposing `login`, `register`, and `logout` methods. Access tokens are stored in `sessionStorage`, automatically attached to every outgoing Axios request by a request interceptor, and validated on startup so that page refreshes within the same browser session don't force a re-login.
+
+---
+
+## AuthProvider
+
+`src/auth/context/jwt/auth-provider.tsx` is a React context provider that manages the full authentication lifecycle. On mount it reads any existing token from `sessionStorage`, validates it, and fetches the current user profile before rendering child routes.
+
+**Initialization flow:**
+
+1. Read `sessionStorage.getItem('accessToken')`.
+2. If a token exists, call `isValidToken(accessToken)` — this decodes the JWT and checks that `exp > Date.now() / 1000`.
+3. If valid, call `GET /api/auth/me` to load the user object.
+4. Dispatch `INITIAL` with the user (or `null` on failure) and set `loading: false`.
+
+**Context state shape:**
+
+```ts
+{
+  user: AuthUserType | null;   // null when unauthenticated
+  loading: boolean;            // true during the initial token check
+  authenticated: boolean;      // derived: !!user && !loading
+  unauthenticated: boolean;    // derived: !user && !loading
+  method: 'jwt';               // auth strategy identifier
+  login: (email, password) => Promise<void>;
+  register: (email, password, firstName, lastName) => Promise<void>;
+  logout: () => Promise<void>;
+}
+```
+
+Use the context anywhere in the tree via the `useAuthContext()` hook:
+
+```ts
+import { useAuthContext } from 'src/auth/hooks';
+
+const { user, authenticated, logout } = useAuthContext();
+```
+
+---
+
+## Authentication Methods
+
+### `login(email, password)`
+
+Posts credentials to the backend, stores both tokens, and updates the context user.
+
+```ts
+const login = async (email: string, password: string) => {
+  const res = await axios.post('/api/auth/login', { email, password });
+
+  const { accessToken, refreshToken, user } = res.data;
+
+  // Persist tokens and set Authorization header
+  setSession(accessToken);                              // stores in sessionStorage + sets Axios default header
+  sessionStorage.setItem('refreshToken', refreshToken); // stored for use during logout
+
+  dispatch({ type: 'LOGIN', payload: { user: { ...user, accessToken } } });
+};
+```
+
+After a successful login the user is redirected to `PATH_AFTER_LOGIN` (`/dashboard`), or to the `returnTo` query param if the guard set one.
+
+---
+
+### `register(email, password, firstName, lastName)`
+
+Creates a new account. The payload combines `firstName` and `lastName` into a single `nombre` field.
+
+```ts
+const register = async (
+  email: string,
+  password: string,
+  firstName: string,
+  lastName: string
+) => {
+  const res = await axios.post('/api/auth/register', {
+    email,
+    password,
+    nombre: `${firstName} ${lastName}`.trim(),
+  });
+
+  const { user } = res.data;
+  dispatch({ type: 'REGISTER', payload: { user } });
+};
+```
+
+<Warning>
+  The backend register endpoint does **not** return an `accessToken`. After registration the user must log in separately using `login()` to obtain a token and access the dashboard.
+</Warning>
+
+---
+
+### `logout()`
+
+Sends the refresh token to the backend to invalidate the server-side session, then clears both tokens from `sessionStorage`.
+
+```ts
+const logout = async () => {
+  try {
+    const refreshToken = sessionStorage.getItem('refreshToken');
+    if (refreshToken) {
+      await axios.post('/api/auth/logout', { refreshToken });
+    }
+  } catch (error) {
+    console.error(error);
+  } finally {
+    setSession(null);                              // removes accessToken + clears Axios default header
+    sessionStorage.removeItem('refreshToken');
+    dispatch({ type: 'LOGOUT' });
+  }
+};
+```
+
+Logout always clears local tokens in the `finally` block, even if the backend call fails.
+
+---
+
+## Token Storage
+
+Both tokens are stored in the browser's `sessionStorage` (not `localStorage`). This means tokens are scoped to the current tab and are cleared automatically when the tab or browser window is closed.
+
+| Key | Storage | Contents |
+|---|---|---|
+| `accessToken` | `sessionStorage` | Short-lived JWT sent as `Authorization: Bearer` on every request |
+| `refreshToken` | `sessionStorage` | Longer-lived token sent only to `POST /api/auth/logout` |
+
+The `setSession` helper in `src/auth/context/jwt/utils.ts` handles both the `sessionStorage` write and the Axios default header in one call. It also schedules an expiry timer:
+
+```ts src/auth/context/jwt/utils.ts
+export const setSession = (accessToken: string | null) => {
+  if (accessToken) {
+    sessionStorage.setItem('accessToken', accessToken);
+    axios.defaults.headers.common.Authorization = `Bearer ${accessToken}`;
+
+    // Schedule a logout alert when the token expires
+    const { exp } = jwtDecode(accessToken);
+    tokenExpired(exp);
+  } else {
+    sessionStorage.removeItem('accessToken');
+    delete axios.defaults.headers.common.Authorization;
+  }
+};
+```
+
+<Tip>
+  To manually inject a token for API testing during development, open the browser DevTools console and run:
+
+  ```js
+  sessionStorage.setItem('accessToken', 'your_jwt_token_here');
+  location.reload(); // triggers AuthProvider initialization
+  ```
+
+  The `AuthProvider` will pick it up on the next render cycle and call `GET /api/auth/me` to load the user.
+</Tip>
+
+---
+
+## Axios Interceptor
+
+`src/utils/axios.ts` registers a **request interceptor** that reads the access token from `sessionStorage` and injects it as a `Bearer` header on every outgoing request:
+
+```ts src/utils/axios.ts
+axiosInstance.interceptors.request.use(
+  (config) => {
+    try {
+      const token = sessionStorage.getItem('accessToken');
+      if (token) {
+        if (!config.headers) config.headers = {};
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    } catch (err) {
+      // Silently ignore if sessionStorage is unavailable (e.g., SSR)
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+```
+
+This interceptor runs on every call made through the shared `axiosInstance` — including all `canchasApi` and `reservasApi` methods. You never need to manually set the `Authorization` header in individual API calls.
+
+A **response interceptor** normalises error payloads:
+
+```ts
+axiosInstance.interceptors.response.use(
+  (res) => res,
+  (error) => Promise.reject((error.response && error.response.data) || 'Something went wrong')
+);
+```
+
+---
+
+## Route Guards
+
+Two guard components protect routes based on authentication state:
+
+### `AuthGuard`
+
+`src/auth/guard/auth-guard.tsx` — wraps **protected** routes. While `loading` is `true` it shows a `SplashScreen`. Once loading finishes, if the user is not authenticated it redirects to `/auth/jwt/login`, preserving the original path as a `returnTo` query param:
+
+```ts
+// redirect target when unauthenticated
+const href = `/auth/jwt/login?returnTo=${window.location.pathname}`;
+router.replace(href);
+```
+
+All dashboard routes are wrapped in `AuthGuard` via `src/routes/sections/dashboard.tsx`:
+
+```tsx src/routes/sections/dashboard.tsx
+export const dashboardRoutes = [
+  {
+    path: 'dashboard',
+    element: (
+      <AuthGuard>
+        <DashboardLayout>
+          <Suspense fallback={<LoadingScreen />}>
+            <Outlet />
+          </Suspense>
+        </DashboardLayout>
+      </AuthGuard>
+    ),
+    children: [
+      { element: <DashboardPage />, index: true },
+      { path: 'canchas', element: <CanchasPage /> },
+      { path: 'reservas', element: <ReservasPage /> },
+    ],
+  },
+];
+```
+
+### `GuestGuard`
+
+`src/auth/guard/guest-guard.tsx` — wraps **public** routes (login and register pages). If a user is already authenticated it immediately redirects them to `returnTo` (or `/dashboard` by default), preventing logged-in users from seeing the auth forms:
+
+```ts
+const returnTo = searchParams.get('returnTo') || paths.dashboard.root;
+
+if (authenticated) {
+  router.replace(returnTo);
+}
+```
+
+---
+
+## Login and Register Views
+
+Both auth views live in `src/sections/auth/jwt/`:
+
+- **`JwtLoginView`** — React Hook Form with Yup validation (`email` required + valid format, `password` required). On submit it calls `login(email, password)` from `useAuthContext()` and navigates to `PATH_AFTER_LOGIN` (`/dashboard`) or the `returnTo` param.
+
+- **`JwtRegisterView`** — React Hook Form collecting `firstName`, `lastName`, `email`, and `password`. All fields are required; email must be a valid address. On submit it calls `register()` from `useAuthContext()`.
+
+Both forms display an `Alert` with the server error message if the request fails, and reset the form fields after an error so the user can retry.
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="401 Unauthorized on every API call">
+    The Axios interceptor could not find a valid token in `sessionStorage`. Common causes:
+    - You are not logged in — navigate to `/auth/jwt/login`.
+    - The token has expired — the `tokenExpired()` timer fires an alert and clears `sessionStorage`; log in again.
+    - The backend is not reachable at `VITE_HOST_API` — check that your `.env` is correct and the Express server is running on port 8000.
+    - `sessionStorage` was cleared — this happens automatically when the tab is closed (by design).
+  </Accordion>
+
+  <Accordion title="Token not persisting across browser tabs or restarts">
+    This is expected behaviour. PitchPro intentionally uses `sessionStorage` rather than `localStorage`. Each browser tab gets its own isolated session storage, and all tokens are cleared when the tab closes. To share a session across tabs you would need to migrate to `localStorage` — keep in mind the security trade-offs of doing so.
+  </Accordion>
+
+  <Accordion title="Register succeeds but dashboard shows 401 immediately after">
+    The `POST /api/auth/register` endpoint creates the account but does **not** return an `accessToken`. After `register()` resolves, no token is written to `sessionStorage`, so any subsequent authenticated request fails with 401. You must navigate to the login page and sign in with the newly created credentials to receive a token.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Backend Authentication" icon="server" href="/backend/authentication">
+    JWT signing, refresh token rotation, and the /api/auth/* endpoints on the Express side.
+  </Card>
+  <Card title="Auth API Reference" icon="key" href="/api/auth">
+    Request/response shapes for login, register, logout, and /api/auth/me.
+  </Card>
+  <Card title="Dashboard" icon="chart-bar" href="/frontend/dashboard">
+    Courts table, reservations list, stat cards, and CRUD dialogs.
+  </Card>
+  <Card title="Frontend Setup" icon="wrench" href="/frontend/setup">
+    Installation, environment variables, and available npm scripts.
+  </Card>
+</CardGroup>

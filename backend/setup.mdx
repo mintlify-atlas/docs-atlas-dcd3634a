@@ -1,0 +1,169 @@
+---
+title: "Backend Setup: Express + TypeScript API for PitchPro"
+sidebarTitle: "Setup"
+description: "Install and run the PitchPro backend API. Covers Node.js setup, PostgreSQL connection, dev server, build, and the seed script."
+---
+
+The PitchPro backend is an Express + TypeScript REST API located in the `arquimarket/` directory. It handles court management, reservations, and JWT-based authentication, with PostgreSQL as its data store and automatic schema initialization on every startup.
+
+## Prerequisites
+
+| Requirement | Version |
+|---|---|
+| Node.js | 18 or later |
+| npm | Bundled with Node.js 18+ |
+| PostgreSQL | 14 or later (or Docker with a Postgres image) |
+
+## Installation
+
+<Steps>
+
+### Navigate to the project directory
+
+```bash
+cd arquimarket/
+```
+
+### Install dependencies
+
+<CodeGroup>
+
+```bash npm
+npm install
+```
+
+```bash yarn
+yarn install
+```
+
+</CodeGroup>
+
+This installs all runtime and dev dependencies, including `express`, `pg`, `jsonwebtoken`, `bcryptjs`, `zod`, `swagger-ui-express`, and TypeScript tooling.
+
+### Create the `.env` file
+
+Create a `.env` file in the `arquimarket/` root with the following variables:
+
+```bash .env
+# Database
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=arquimarket
+DB_USER=arquiuser
+DB_PASSWORD=arquipass
+
+# API
+PORT=8000
+NODE_ENV=development
+```
+
+See the [Configuration](/backend/configuration) page for a full description of every variable.
+
+### Start the development server
+
+```bash
+npm run dev
+```
+
+This runs `ts-node src/main.ts`, which initializes the database schema and starts listening. You should see:
+
+```
+✅ Tablas "canchas", "reservas" y "users" verificadas/creadas.
+🚀 Servidor corriendo en http://localhost:8000
+📝 Documentación disponible en http://localhost:8000/docs
+```
+
+</Steps>
+
+## Available Scripts
+
+| Script | Command | Description |
+|---|---|---|
+| `dev` | `ts-node src/main.ts` | Start the development server with live TypeScript execution |
+| `seed` | `ts-node src/db/seed.ts` | Populate the database with 20 sample courts and 20 reservations |
+| `build` | `tsc` | Compile TypeScript to JavaScript in `dist/` |
+| `start` | `node dist/main.js` | Run the compiled production build |
+
+## Seed Data
+
+Run the seed script to populate the database with realistic sample data for development and testing:
+
+```bash
+npm run seed
+```
+
+The script is **idempotent** — it checks the existing row count in each table before inserting. If records already exist, it skips that table and logs a message instead of duplicating data.
+
+**What gets inserted:**
+
+- **20 canchas** — courts named `Cancha 1` through `Cancha 20`, each with a synthetic grass description and a `precio_hora` that cycles through values between `30.00` and `55.00`:
+
+```json
+{
+  "nombre": "Cancha 5",
+  "descripcion": "Cancha de prueba número 5 — césped sintético, iluminación.",
+  "precio_hora": "50.00",
+  "activa": true
+}
+```
+
+- **20 reservas** — reservations randomly distributed across the next 30 days, assigned to existing court IDs, with randomized `estado` (`pendiente`, `confirmada`, `cancelada`) and `origen` (`whatsapp`, `interfaz`).
+
+Both sets of inserts run inside a PostgreSQL transaction — if any row fails, the entire batch is rolled back.
+
+<Note>
+  Run `npm run seed` only after starting the server at least once, so `initDatabase()` has had a chance to create the tables.
+</Note>
+
+## Swagger UI
+
+Once the server is running, interactive API documentation is available at:
+
+```
+http://localhost:8000/docs
+```
+
+The Swagger UI is mounted via `swagger-ui-express` and covers all endpoints in the `auth`, `canchas`, and `reservas` modules.
+
+## Project Structure
+
+```
+arquimarket/
+└── src/
+    ├── main.ts                   # App entry point — wires Express, routes, Swagger
+    ├── swagger.ts                # OpenAPI spec (inline)
+    ├── db/
+    │   ├── connection.ts         # pg Pool instance (shared across modules)
+    │   ├── init.ts               # CREATE TABLE IF NOT EXISTS for all three tables
+    │   └── seed.ts               # Seed script for development data
+    ├── middlewares/
+    │   └── verifyToken.ts        # JWT Bearer token guard
+    └── modules/
+        ├── auth/
+        │   ├── auth.controller.ts   # /api/auth routes (register, login, refresh, logout, me)
+        │   └── auth.validator.ts    # express-validator rules
+        ├── canchas/
+        │   ├── canchas.controller.ts  # /api/canchas routes
+        │   ├── canchas.service.ts     # Business logic + CanchaNoEncontradaError
+        │   ├── canchas.repository.ts  # SQL queries via pg pool
+        │   └── canchas.types.ts       # Zod schema + TypeScript interfaces
+        └── reservas/
+            ├── reservas.controller.ts  # /api/reservas routes
+            ├── reservas.repository.ts  # SQL queries + overlap detection
+            └── reservas.types.ts       # Zod schema + TypeScript interfaces
+```
+
+<CardGroup cols={2}>
+  <Card title="Database Schema" icon="database" href="/backend/database">
+    Explore the three-table PostgreSQL schema and connection pool setup.
+  </Card>
+  <Card title="Authentication" icon="lock" href="/backend/authentication">
+    Understand the JWT dual-token strategy and all auth endpoints.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/backend/configuration">
+    Full reference for every environment variable.
+  </Card>
+  <Card title="API Overview" icon="book" href="/api/overview">
+    Browse the full REST API endpoint reference.
+  </Card>
+</CardGroup>

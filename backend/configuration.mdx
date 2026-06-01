@@ -1,0 +1,156 @@
+---
+title: "Backend Configuration and Environment Variables"
+sidebarTitle: "Configuration"
+description: "All environment variables for the PitchPro Express backend. Covers database connection, server port, JWT secrets, and Node environment."
+---
+
+The PitchPro backend reads all runtime configuration from a `.env` file in the `arquimarket/` root directory, loaded at startup via the `dotenv` package (`dotenv.config()` is called in both `src/main.ts` and `src/db/connection.ts`). No configuration is hard-coded in the application logic — with the exception of insecure development fallbacks for JWT secrets that **must be overridden in production**.
+
+## Environment Variables Reference
+
+<ParamField body="PORT" type="number" default="8000">
+  The TCP port the Express HTTP server listens on. Change this if port `8000` is already in use on your machine or host.
+</ParamField>
+
+<ParamField body="DB_HOST" type="string" required>
+  Hostname or IP address of the PostgreSQL server. Use `localhost` for a local installation or a Docker container linked by service name (e.g. `postgres` in Docker Compose).
+</ParamField>
+
+<ParamField body="DB_PORT" type="number" required>
+  PostgreSQL server port. The standard default is `5432`. Change this only if your PostgreSQL instance is bound to a non-standard port.
+</ParamField>
+
+<ParamField body="DB_NAME" type="string" required>
+  Name of the PostgreSQL database PitchPro will connect to. The database must exist before starting the server — PitchPro creates **tables** automatically, but not the database itself. Example: `arquimarket`.
+</ParamField>
+
+<ParamField body="DB_USER" type="string" required>
+  PostgreSQL role / username. The role must have `CONNECT`, `CREATE TABLE`, and `INSERT`/`SELECT`/`UPDATE` privileges on `DB_NAME`. Example: `arquiuser`.
+</ParamField>
+
+<ParamField body="DB_PASSWORD" type="string" required>
+  Password for `DB_USER`. Passed directly to the `pg.Pool` constructor. Never commit a real production password to source control.
+</ParamField>
+
+<ParamField body="JWT_SECRET" type="string" default="secret_key_123">
+  Secret used to sign and verify **access tokens** (15-minute expiry). The application falls back to `secret_key_123` if this variable is absent — this fallback is intentionally weak and exists only for local development.
+
+  <Warning>**You must set a strong, unique value in any non-local environment.** A compromised `JWT_SECRET` allows an attacker to forge access tokens for any user ID.</Warning>
+</ParamField>
+
+<ParamField body="JWT_REFRESH_SECRET" type="string" default="refresh_secret_key_456">
+  Secret used to sign and verify **refresh tokens** (7-day expiry). The application falls back to `refresh_secret_key_456` if this variable is absent.
+
+  <Warning>**You must set a strong, unique value in any non-local environment.** A compromised `JWT_REFRESH_SECRET` allows an attacker to obtain new access tokens indefinitely.</Warning>
+</ParamField>
+
+<ParamField body="NODE_ENV" type="string" default="development">
+  Runtime environment indicator. Accepted values: `development` | `production`. Affects error verbosity and may be used by middleware libraries (e.g. `cors`, `express`) that behave differently in production mode.
+</ParamField>
+
+## Example `.env` File
+
+```bash .env
+# Database
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=arquimarket
+DB_USER=arquiuser
+DB_PASSWORD=arquipass
+
+# API
+PORT=8000
+NODE_ENV=development
+```
+
+<Note>
+  This is the exact `.env` shipped with the repository for local development. Copy it, rename it to `.env`, and update the values for your environment. The `.env` file is typically listed in `.gitignore` and should never be committed to version control.
+</Note>
+
+## TypeScript Configuration
+
+The TypeScript compiler is configured in `tsconfig.json` at the project root:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+```
+
+| Option | Value | Effect |
+|---|---|---|
+| `target` | `ES2020` | Compiles to ES2020 JavaScript, compatible with Node.js 14+ |
+| `module` | `commonjs` | Outputs `require()`/`module.exports` — the Node.js native module format |
+| `outDir` | `./dist` | Compiled `.js` files are placed in `dist/`. Run with `node dist/main.js` |
+| `rootDir` | `./src` | All TypeScript source lives under `src/` |
+| `strict` | `true` | Enables the full suite of strict type checks (no implicit `any`, strict null checks, etc.) |
+| `esModuleInterop` | `true` | Allows `import x from 'module'` syntax for CommonJS modules |
+
+Run `npm run build` to compile. The output in `dist/` is then run with `npm start` (`node dist/main.js`).
+
+## CORS
+
+The server enables CORS globally using the `cors` middleware with **default settings** (all origins allowed):
+
+```typescript src/main.ts
+import cors from 'cors';
+app.use(cors());
+```
+
+This is appropriate for local development but too permissive for production. To restrict allowed origins in production, pass an options object:
+
+```typescript
+app.use(cors({
+  origin: ['https://app.pitchpro.com', 'https://admin.pitchpro.com'],
+  methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+```
+
+<Note>
+  The `Authorization` header must be included in `allowedHeaders` when using JWT Bearer tokens from a browser-based frontend.
+</Note>
+
+## Swagger
+
+Swagger UI is mounted at `/docs` using `swagger-ui-express`:
+
+```typescript src/main.ts
+import swaggerUi from 'swagger-ui-express';
+import { swaggerDocument } from './swagger';
+
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+```
+
+The OpenAPI specification is defined inline in `src/swagger.ts` and covers all endpoints across the `auth`, `canchas`, and `reservas` modules. After starting the server, visit:
+
+```
+http://localhost:8000/docs
+```
+
+No additional configuration is needed for the Swagger UI in development. In production, consider restricting access to the `/docs` route (e.g. via an IP allowlist or authentication guard) to avoid exposing your API specification publicly.
+
+<CardGroup cols={2}>
+  <Card title="Backend Setup" icon="rocket" href="/backend/setup">
+    Step-by-step installation, dev server, and seed script.
+  </Card>
+  <Card title="Environment Variables (Deployment)" icon="server" href="/deployment/environment-variables">
+    How to inject environment variables in Docker and cloud deployments.
+  </Card>
+  <Card title="Docker Deployment" icon="docker" href="/deployment/docker">
+    Run PitchPro and PostgreSQL together with Docker Compose.
+  </Card>
+</CardGroup>

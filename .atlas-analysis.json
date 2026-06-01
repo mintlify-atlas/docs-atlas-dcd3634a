@@ -1,0 +1,96 @@
+{
+  "projectType": "saas",
+  "projectName": "PitchPro — ArquiMarket",
+  "projectDescription": "A full-stack sports court reservation system with a TypeScript/Express REST API backend and a React/Vite frontend dashboard for managing courts (canchas) and bookings (reservas).",
+  "theme": "luma",
+  "primaryColor": "#1A7F37",
+  "lightColor": "#D3F0DB",
+  "darkColor": "#0D5E27",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Backend Guide",
+            "pages": [
+              "backend/setup",
+              "backend/database",
+              "backend/authentication",
+              "backend/configuration"
+            ]
+          },
+          {
+            "group": "Frontend Guide",
+            "pages": [
+              "frontend/setup",
+              "frontend/auth-flow",
+              "frontend/dashboard"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/environment-variables"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/auth",
+              "api/canchas",
+              "api/reservas",
+              "api/health"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "JWT-based authentication with access token (15 min) and refresh token (7 days)",
+    "Court (cancha) management: list, get by ID, create with Zod validation",
+    "Booking (reserva) management: list all, create with overlap conflict detection",
+    "Swagger/OpenAPI documentation available at /docs",
+    "React + MUI dashboard with real-time stats (system health, total courts, active bookings)",
+    "PostgreSQL database with auto-initialized schema on startup",
+    "Docker Compose setup for local PostgreSQL",
+    "Seed script to populate 20 sample courts and 20 sample reservations",
+    "Role-based auth guards on frontend routes",
+    "Axios interceptor that injects Bearer token on every request"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/register — create a new user account",
+    "POST /api/auth/login — authenticate and receive accessToken + refreshToken",
+    "POST /api/auth/refresh — exchange refreshToken for a new accessToken",
+    "POST /api/auth/logout — invalidate the refresh token",
+    "GET /api/auth/me — get the currently authenticated user",
+    "GET /api/canchas — list all courts (JWT required)",
+    "GET /api/canchas/:id — get a single court by ID (JWT required)",
+    "POST /api/canchas — create a new court (JWT required)",
+    "GET /api/reservas — list all reservations (JWT required)",
+    "POST /api/reservas — create a booking with overlap validation (JWT required)",
+    "GET /health — service health check"
+  ]
+}

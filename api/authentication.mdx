@@ -1,0 +1,197 @@
+---
+title: "Authenticating Requests to the PitchPro API"
+sidebarTitle: "Authentication"
+description: "How to obtain a JWT access token via login and pass it in requests to protected PitchPro API endpoints. Covers token refresh and logout."
+---
+
+Protected endpoints (`/api/canchas` and `/api/reservas`) require a **JWT access token**. Obtain one by registering an account and logging in, then include it in the `Authorization` header of every subsequent request. Access tokens are short-lived (15 minutes); use the refresh token to get a new one without re-entering credentials.
+
+<Steps>
+
+  <Step title="Register an account">
+
+    Create a new user account by posting `nombre`, `email`, and `password` to `/api/auth/register`. Passwords must be **at least 6 characters** long and emails must be unique across the system.
+
+    <Warning>
+      If the email is already registered you will receive a `400 Bad Request` with `{"errors": [{"msg": "El email ya está registrado"}]}`. Use a different address or go straight to login.
+    </Warning>
+
+    ```bash
+    curl -X POST http://localhost:8000/api/auth/register \
+      -H 'Content-Type: application/json' \
+      -d '{"nombre": "Juan Pérez", "email": "juan@example.com", "password": "secret123"}'
+    ```
+
+    **Successful response — `201 Created`:**
+
+    ```json
+    {
+      "user": {
+        "id": 1,
+        "nombre": "Juan Pérez",
+        "email": "juan@example.com"
+      }
+    }
+    ```
+
+    The response intentionally omits the hashed password. Store the `id` if you need it, but logging in (next step) will return the full user object again.
+
+  </Step>
+
+  <Step title="Log in">
+
+    Exchange your credentials for an **access token** and a **refresh token** by posting to `/api/auth/login`.
+
+    ```bash
+    curl -X POST http://localhost:8000/api/auth/login \
+      -H 'Content-Type: application/json' \
+      -d '{"email": "juan@example.com", "password": "secret123"}'
+    ```
+
+    **Successful response — `200 OK`:**
+
+    ```json
+    {
+      "accessToken": "eyJhbGciOiJIUzI1NiIs...",
+      "refreshToken": "eyJhbGciOiJIUzI1NiIs...",
+      "user": {
+        "id": 1,
+        "nombre": "Juan Pérez",
+        "email": "juan@example.com"
+      }
+    }
+    ```
+
+    <Note>
+      The refresh token is persisted in the `users` table (`refresh_token` column). Only one refresh token is active per user at a time — logging in again overwrites the previous one.
+    </Note>
+
+    Save both tokens securely. You will need the `accessToken` for every protected request and the `refreshToken` to obtain a new access token once it expires.
+
+  </Step>
+
+  <Step title="Make authenticated requests">
+
+    Attach the access token to every request that targets a protected route by setting the `Authorization` header to `Bearer <accessToken>`:
+
+    ```bash
+    curl http://localhost:8000/api/canchas \
+      -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIs...'
+    ```
+
+    The `verifyToken` middleware validates the token on every request to `/api/canchas/*` and `/api/reservas/*`. If the token is missing, malformed, or expired you will receive:
+
+    ```json
+    {
+      "message": "Acceso denegado. Token no proporcionado."
+    }
+    ```
+
+    or, for an invalid/expired token:
+
+    ```json
+    {
+      "message": "Token inválido o expirado"
+    }
+    ```
+
+    You can also retrieve the currently authenticated user's profile with the `/api/auth/me` endpoint:
+
+    ```bash
+    curl http://localhost:8000/api/auth/me \
+      -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIs...'
+    ```
+
+    ```json
+    {
+      "user": {
+        "id": 1,
+        "nombre": "Juan Pérez",
+        "email": "juan@example.com"
+      }
+    }
+    ```
+
+  </Step>
+
+</Steps>
+
+## Refreshing the Token
+
+Access tokens expire in **15 minutes**. When a request returns `401`, use the refresh token to obtain a new access token without requiring the user to log in again.
+
+Post the stored refresh token to `/api/auth/refresh`:
+
+```bash
+curl -X POST http://localhost:8000/api/auth/refresh \
+  -H 'Content-Type: application/json' \
+  -d '{"refreshToken": "eyJhbGciOiJIUzI1NiIs..."}'
+```
+
+**Successful response — `200 OK`:**
+
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiIs..."
+}
+```
+
+Replace the old access token in your storage with the new one and retry the original request.
+
+<Warning>
+  If the refresh token itself is invalid, has been tampered with, or is no longer stored in the database (e.g., the user already logged out), the server returns `403 Forbidden`:
+
+  ```json
+  { "message": "Refresh token inválido o expirado" }
+  ```
+
+  In this case, redirect the user back to the login screen.
+</Warning>
+
+## Logout
+
+Send the refresh token to `/api/auth/logout` to invalidate the session. The server sets `refresh_token = NULL` in the database for the matching user, preventing the token from ever being used again.
+
+```bash
+curl -X POST http://localhost:8000/api/auth/logout \
+  -H 'Content-Type: application/json' \
+  -d '{"refreshToken": "eyJhbGciOiJIUzI1NiIs..."}'
+```
+
+**Successful response — `200 OK`:**
+
+```json
+{
+  "message": "Logout exitoso"
+}
+```
+
+After logging out, discard both the `accessToken` and `refreshToken` from client-side storage. Any subsequent requests using the old access token will continue to succeed until the 15-minute expiry window closes, but the refresh token will no longer be exchangeable.
+
+## Token Expiry Reference
+
+| Token | Lifetime | Notes |
+|-------|----------|-------|
+| `accessToken` | **15 minutes** | Short-lived; signed with `JWT_SECRET`; carries `id` and `email` claims |
+| `refreshToken` | **7 days** | Long-lived; signed with `JWT_REFRESH_SECRET`; carries `id` claim only; stored in DB |
+
+<Note>
+  **Frontend usage** — The React dashboard stores the access token in `sessionStorage` under the key `'accessToken'` and automatically injects it into every outbound API call via an **Axios request interceptor**. The interceptor reads `sessionStorage.getItem('accessToken')` and appends the `Authorization: Bearer <token>` header before the request is sent, so you never need to set the header manually in frontend code.
+</Note>
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Auth Endpoints" icon="lock" href="/api/auth">
+    Full reference for all five `/api/auth/*` routes — schemas, validation rules, and error codes.
+  </Card>
+  <Card title="Backend Authentication" icon="server" href="/backend/authentication">
+    How `verifyToken` middleware, bcrypt hashing, and JWT signing work under the hood.
+  </Card>
+  <Card title="Frontend Auth Flow" icon="browser" href="/frontend/auth-flow">
+    How the React dashboard handles login state, `sessionStorage`, and the Axios interceptor.
+  </Card>
+  <Card title="API Overview" icon="map" href="/api/overview">
+    Base URL, response envelope format, status codes, and the full endpoint index.
+  </Card>
+</CardGroup>

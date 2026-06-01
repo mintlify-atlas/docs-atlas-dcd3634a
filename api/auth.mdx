@@ -1,0 +1,286 @@
+---
+title: "Authentication Endpoints — POST /api/auth"
+sidebarTitle: "Auth Endpoints"
+description: "REST endpoints for user registration, login, access token refresh, logout, and getting the current user in PitchPro."
+---
+
+The `/api/auth` prefix groups all authentication endpoints. Requests to these routes do **not** require a JWT token — with the single exception of `GET /api/auth/me`, which validates the caller's access token to return their profile.
+
+---
+
+## POST /api/auth/register
+
+Creates a new user account. The request body is validated by `express-validator` before the handler runs; if any field fails, a `400` is returned before any database query is made.
+
+### Request body
+
+<ParamField body="nombre" type="string" required>
+  Display name for the user. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Must be a valid email address (validated by `express-validator` `isEmail()`). If the address is already registered a `400` is returned.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plain-text password. Must be at least 6 characters (`isLength({ min: 6 })`). Stored as a bcrypt hash (salt rounds: 10).
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST http://localhost:8000/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"nombre": "Juan Pérez", "email": "juan@example.com", "password": "secret123"}'
+```
+
+### Response — 201 Created
+
+```json
+{
+  "user": {
+    "id": 1,
+    "nombre": "Juan Pérez",
+    "email": "juan@example.com"
+  }
+}
+```
+
+<ResponseField name="user" type="object">
+  <Expandable title="user fields">
+    <ResponseField name="id" type="number">
+      Auto-incremented primary key of the new user.
+    </ResponseField>
+    <ResponseField name="nombre" type="string">
+      The display name provided at registration.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      The verified email address of the user.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error codes
+
+| Code | Meaning |
+|------|---------|
+| `400` | Email already registered — `{ errors: [{ msg: "El email ya está registrado" }] }` |
+| `400` | Validation failure (invalid email format, password too short, missing nombre) — `{ errors: [{msg, param, ...}] }` |
+| `500` | Internal server error |
+
+---
+
+## POST /api/auth/login
+
+Authenticates an existing user and returns a short-lived access token plus a long-lived refresh token. The refresh token is persisted in the `users.refresh_token` column so it can be validated and revoked.
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The user's registered email address.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The user's plain-text password. Compared against the stored bcrypt hash.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST http://localhost:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "juan@example.com", "password": "secret123"}'
+```
+
+### Response — 200 OK
+
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": 1,
+    "nombre": "Juan Pérez",
+    "email": "juan@example.com"
+  }
+}
+```
+
+<ResponseField name="accessToken" type="string">
+  Signed JWT (HS256). Expires in **15 minutes**. Include as `Authorization: Bearer <accessToken>` on all protected routes.
+</ResponseField>
+
+<ResponseField name="refreshToken" type="string">
+  Signed JWT (HS256). Expires in **7 days**. Stored in `users.refresh_token` in the database for server-side validation. Send to `POST /api/auth/refresh` to obtain a new access token.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  <Expandable title="user fields">
+    <ResponseField name="id" type="number">
+      The user's database ID.
+    </ResponseField>
+    <ResponseField name="nombre" type="string">
+      The user's display name.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      The user's email address.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error codes
+
+| Code | Meaning |
+|------|---------|
+| `400` | Invalid credentials (user not found or wrong password) — `{ errors: [{ msg: "Credenciales inválidas" }] }` |
+| `400` | Validation failure (invalid email format, missing password) |
+| `500` | Internal server error |
+
+---
+
+## POST /api/auth/refresh
+
+Exchanges a valid refresh token for a new 15-minute access token. The provided refresh token is verified cryptographically and cross-checked against the value stored in the database — so tokens invalidated via logout are rejected.
+
+### Request body
+
+<ParamField body="refreshToken" type="string" required>
+  The refresh token obtained from `POST /api/auth/login`. Must be a valid, non-expired JWT that matches the value stored in the database.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST http://localhost:8000/api/auth/refresh \
+  -H 'Content-Type: application/json' \
+  -d '{"refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}'
+```
+
+### Response — 200 OK
+
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+<ResponseField name="accessToken" type="string">
+  A freshly signed access token with a new 15-minute expiry window.
+</ResponseField>
+
+### Error codes
+
+| Code | Meaning |
+|------|---------|
+| `401` | Refresh token not provided in the request body |
+| `403` | Refresh token is invalid, expired, or has been revoked (not found in DB) |
+
+---
+
+## POST /api/auth/logout
+
+Invalidates a refresh token by setting `users.refresh_token = NULL` in the database. Subsequent calls to `POST /api/auth/refresh` using this token will return `403`.
+
+<Note>
+  This endpoint only invalidates the **refresh** token server-side. Your client application is responsible for discarding the stored access token locally, since access tokens are stateless and cannot be revoked before they expire (15 min).
+</Note>
+
+### Request body
+
+<ParamField body="refreshToken" type="string" required>
+  The refresh token to revoke. Must be the token currently associated with the user's session.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST http://localhost:8000/api/auth/logout \
+  -H 'Content-Type: application/json' \
+  -d '{"refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}'
+```
+
+### Response — 200 OK
+
+```json
+{
+  "message": "Logout exitoso"
+}
+```
+
+<ResponseField name="message" type="string">
+  Confirmation string. Always `"Logout exitoso"` on success.
+</ResponseField>
+
+### Error codes
+
+| Code | Meaning |
+|------|---------|
+| `400` | Refresh token was not included in the request body |
+| `500` | Internal server error |
+
+---
+
+## GET /api/auth/me
+
+Returns the profile of the currently authenticated user. The access token is read directly from the `Authorization` header — **no** request body is needed.
+
+<Warning>
+  This is the only `/api/auth` route that requires a valid `Authorization: Bearer <accessToken>` header. All other auth routes are unauthenticated.
+</Warning>
+
+### Request headers
+
+| Header | Value |
+|--------|-------|
+| `Authorization` | `Bearer <accessToken>` — the JWT obtained from `POST /api/auth/login` |
+
+### Example request
+
+```bash
+curl http://localhost:8000/api/auth/me \
+  -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
+```
+
+### Response — 200 OK
+
+```json
+{
+  "user": {
+    "id": 1,
+    "nombre": "Juan Pérez",
+    "email": "juan@example.com"
+  }
+}
+```
+
+<ResponseField name="user" type="object">
+  <Expandable title="user fields">
+    <ResponseField name="id" type="number">
+      The user's database ID, decoded from the JWT payload.
+    </ResponseField>
+    <ResponseField name="nombre" type="string">
+      The user's display name, fetched from the `users` table.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      The user's email address, fetched from the `users` table.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error codes
+
+| Code | Meaning |
+|------|---------|
+| `401` | No `Authorization` header, header is malformed, or the token has expired |
+| `404` | Token is valid but the corresponding user no longer exists in the database |
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Authentication Guide" icon="key" href="api/authentication">
+    Understand the JWT flow — how access and refresh tokens work together in PitchPro.
+  </Card>
+  <Card title="API Overview" icon="map" href="api/overview">
+    See all available endpoints at a glance and learn about base URLs and error formats.
+  </Card>
+</CardGroup>

@@ -1,0 +1,228 @@
+---
+title: "Running PitchPro with Docker Compose"
+sidebarTitle: "Docker"
+description: "Use Docker Compose to spin up PostgreSQL for local PitchPro development. Covers the postgres:16-alpine service, volume, healthcheck, and env vars."
+---
+
+Docker Compose is the easiest way to start a local PostgreSQL instance for PitchPro development. With a single command you get a fully configured, health-checked database that automatically persists data across restarts — no manual PostgreSQL installation required.
+
+## Prerequisites
+
+- **Docker Desktop** (macOS / Windows) or **Docker Engine** (Linux) — v24+
+- **Docker Compose v2** — bundled with Docker Desktop; on Linux install the `docker-compose-plugin` package
+
+Confirm your versions before proceeding:
+
+```bash
+docker --version          # Docker version 24.x or later
+docker compose version    # Docker Compose version v2.x or later
+```
+
+## Starting PostgreSQL
+
+<Steps>
+  <Step title="Navigate to the backend directory">
+    All Docker Compose commands must be run from the `arquimarket/` folder, where `docker-compose.yml` lives.
+
+    ```bash
+    cd arquimarket
+    ```
+  </Step>
+
+  <Step title="Ensure your .env file exists">
+    Docker Compose reads the database credentials from your `.env` file at startup. The file must define `DB_NAME`, `DB_USER`, and `DB_PASSWORD`. Copy the example if you haven't already:
+
+    ```bash
+    # If you don't have .env yet, create it with the defaults:
+    cp .env.example .env   # or create it manually — see Environment Variables
+    ```
+
+    A minimal working `.env`:
+
+    ```env
+    DB_HOST=localhost
+    DB_PORT=5432
+    DB_NAME=arquimarket
+    DB_USER=arquiuser
+    DB_PASSWORD=arquipass
+    PORT=8000
+    NODE_ENV=development
+    ```
+
+    <Note>
+      The `DB_HOST` and `DB_PORT` values are used by the **Node.js app** to connect to the database. Docker Compose itself reads `DB_NAME`, `DB_USER`, and `DB_PASSWORD` to initialise the container.
+    </Note>
+  </Step>
+
+  <Step title="Start the PostgreSQL container">
+    Launch the container in detached (background) mode:
+
+    ```bash
+    docker compose up -d
+    ```
+
+    Docker will pull `postgres:16-alpine` on first run (≈ 80 MB), create the `pgdata` volume, and start the container.
+  </Step>
+
+  <Step title="Verify the container is healthy">
+    Run the status check and confirm the `postgres` service shows `(healthy)`:
+
+    ```bash
+    docker compose ps
+    ```
+
+    Expected output:
+
+    ```
+    NAME                    IMAGE                COMMAND                  SERVICE    CREATED        STATUS                   PORTS
+    arquimarket-postgres-1  postgres:16-alpine   "docker-entrypoint.s…"  postgres   2 minutes ago  Up 2 minutes (healthy)   0.0.0.0:5432->5432/tcp
+    ```
+
+    If the status shows `(health: starting)`, wait 10–15 seconds and run `docker compose ps` again.
+  </Step>
+
+  <Step title="Start the backend server">
+    With the database healthy, start the Express API:
+
+    ```bash
+    npm run dev
+    ```
+
+    You should see:
+
+    ```
+    🚀 Servidor corriendo en http://localhost:8000
+    📝 Documentación disponible en http://localhost:8000/docs
+    ```
+  </Step>
+</Steps>
+
+---
+
+## docker-compose.yml Explained
+
+The full contents of `arquimarket/docker-compose.yml`:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+```
+
+| Field | Value | Purpose |
+|---|---|---|
+| `image` | `postgres:16-alpine` | Uses the official PostgreSQL 16 image built on Alpine Linux — small footprint (~80 MB), security-hardened |
+| `ports` | `5432:5432` | Maps the container's PostgreSQL port to `localhost:5432` so the Node.js app (and tools like pgAdmin) can connect |
+| `environment.POSTGRES_DB` | `${DB_NAME}` | Reads the database name from your `.env` file at container start |
+| `environment.POSTGRES_USER` | `${DB_USER}` | Reads the superuser username from your `.env` file |
+| `environment.POSTGRES_PASSWORD` | `${DB_PASSWORD}` | Reads the password from your `.env` file — never hard-coded |
+| `volumes` | `pgdata:/var/lib/postgresql/data` | Mounts a named Docker volume so data survives container restarts and `docker compose down` (without `-v`) |
+| `healthcheck.test` | `pg_isready -U $$POSTGRES_USER` | Runs PostgreSQL's built-in readiness probe inside the container. The `$$` escapes the `$` so Docker Compose doesn't interpolate it as a host variable |
+| `healthcheck.interval` | `10s` | Probes every 10 seconds |
+| `healthcheck.timeout` | `5s` | Fails the probe if no response within 5 seconds |
+| `healthcheck.retries` | `5` | Marks the container `unhealthy` after 5 consecutive failures |
+
+---
+
+## Useful Docker Commands
+
+```bash
+# Start the database container in the background
+docker compose up -d
+
+# Check container status and health
+docker compose ps
+
+# Stream PostgreSQL logs (Ctrl+C to stop)
+docker compose logs postgres
+
+# Follow logs live
+docker compose logs -f postgres
+
+# Stop the container (data preserved in pgdata volume)
+docker compose down
+
+# Stop the container AND delete the pgdata volume (all data is erased)
+docker compose down -v
+
+# Restart only the postgres service (useful after config changes)
+docker compose restart postgres
+
+# Open a psql shell inside the running container
+docker compose exec postgres psql -U arquiuser -d arquimarket
+```
+
+<Note>
+  Use `docker compose down -v` when you want a completely fresh database — for example, after changing the schema seed or rotating credentials. All table data and the `pgdata` volume will be permanently deleted.
+</Note>
+
+---
+
+## Connecting Without Docker
+
+If you already have a local PostgreSQL installation (v14 or later), you can skip Docker entirely. PitchPro's backend uses the `pg` Node.js library (`pg.Pool`) and connects to any compatible PostgreSQL server using the `DB_*` environment variables.
+
+Simply set the variables in `arquimarket/.env` to point at your existing instance:
+
+```env
+DB_HOST=localhost      # or your PostgreSQL server hostname/IP
+DB_PORT=5432           # default PostgreSQL port
+DB_NAME=arquimarket    # create this database first: CREATE DATABASE arquimarket;
+DB_USER=youruser
+DB_PASSWORD=yourpassword
+```
+
+Then create the database if it doesn't exist:
+
+```sql
+-- Run in psql or your favourite PostgreSQL client
+CREATE DATABASE arquimarket;
+```
+
+The backend's `initDatabase()` function will automatically create all required tables on first startup — no manual migrations needed.
+
+---
+
+## Production Notes
+
+<Warning>
+  The `docker-compose.yml` file is designed for **local development only**.
+
+  - **Do not** expose port `5432` publicly in production.
+  - **Do not** use the default credentials (`arquiuser` / `arquipass`) from the example `.env`.
+  - For production deployments, use a managed PostgreSQL service such as [AWS RDS](https://aws.amazon.com/rds/postgresql/), [Supabase](https://supabase.com), or [Neon](https://neon.tech), and configure the `DB_*` environment variables to point to that service.
+  - Rotate `JWT_SECRET` and `JWT_REFRESH_SECRET` to strong, randomly generated values before deploying.
+</Warning>
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Environment Variables" icon="key" href="/deployment/environment-variables">
+    Reference for all backend and frontend `.env` variables, including JWT secrets and database credentials.
+  </Card>
+  <Card title="Backend Setup" icon="server" href="/backend/setup">
+    Install dependencies, run database migrations, and start the Express API locally.
+  </Card>
+  <Card title="Database" icon="database" href="/backend/database">
+    Schema overview, table definitions, and the `initDatabase()` auto-migration system.
+  </Card>
+  <Card title="Frontend Setup" icon="browser" href="/frontend/setup">
+    Configure and run the Vite + React frontend, including `VITE_HOST_API` pointing to the backend.
+  </Card>
+</CardGroup>

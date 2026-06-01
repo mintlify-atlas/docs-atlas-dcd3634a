@@ -1,0 +1,150 @@
+---
+title: "PitchPro REST API — Endpoints and Conventions"
+sidebarTitle: "Overview"
+description: "Overview of PitchPro's REST API: base URL, authentication, response format, status codes, and all available endpoints."
+---
+
+PitchPro's backend is an **Express + TypeScript** REST API that exposes all court and reservation management functionality over HTTP. Every response is **JSON**. Protected routes (`/api/canchas` and `/api/reservas`) require a valid JWT **Bearer token** issued at login. An interactive **Swagger UI** is bundled at `/docs` so you can explore and test every endpoint directly from the browser.
+
+## Base URL
+
+```
+http://localhost:8000   # local development
+```
+
+<Note>
+  The server port defaults to **8000** but can be overridden with the `PORT` environment variable. All application routes are grouped under the following prefixes:
+
+  | Prefix | Description |
+  |--------|-------------|
+  | `/api/auth/*` | Authentication routes (register, login, refresh, logout, me) |
+  | `/api/canchas` | Court management (list, get, create) |
+  | `/api/reservas` | Reservation management (list, create) |
+  | `/health` | Service health check |
+</Note>
+
+## Authentication
+
+Endpoints under `/api/canchas` and `/api/reservas` are protected by the `verifyToken` middleware. Every request to these routes **must** include a valid JWT access token in the `Authorization` header:
+
+```http
+Authorization: Bearer <accessToken>
+```
+
+Omitting the header, or sending an expired or malformed token, returns a **401 Unauthorized** response:
+
+```json
+{
+  "message": "Acceso denegado. Token no proporcionado."
+}
+```
+
+<Note>
+  See [Authentication](/api/authentication) for the full step-by-step guide on registering, logging in, and refreshing tokens.
+</Note>
+
+## Response Format
+
+All API responses are JSON. The main resource endpoints (`/api/canchas`, `/api/reservas`) wrap their payloads in a consistent **envelope**:
+
+```json
+{
+  "ok": true,
+  "total": 5,
+  "data": [...]
+}
+```
+
+Error responses follow a unified error shape:
+
+```json
+{
+  "ok": false,
+  "mensaje": "Error message"
+}
+```
+
+Validation errors from `express-validator` (auth routes) return an `errors` array instead:
+
+```json
+{
+  "errors": [
+    { "msg": "Debe ser un email válido" }
+  ]
+}
+```
+
+Auth responses from `/api/auth/login` return a **flat object** rather than the envelope — the shape includes the token pair and the authenticated user:
+
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiIs...",
+  "refreshToken": "eyJhbGciOiJIUzI1NiIs...",
+  "user": {
+    "id": 1,
+    "nombre": "Juan Pérez",
+    "email": "juan@example.com"
+  }
+}
+```
+
+## HTTP Status Codes
+
+| Code | Status | When it occurs |
+|------|--------|----------------|
+| `200` | OK | Successful `GET` request |
+| `201` | Created | Successful `POST` that creates a resource |
+| `400` | Bad Request | Validation error (missing fields, invalid email, duplicate email on register, invalid credentials on login) |
+| `401` | Unauthorized | Missing or invalid/expired Bearer token |
+| `403` | Forbidden | Invalid or expired refresh token supplied to `/api/auth/refresh` |
+| `404` | Not Found | Requested resource (court, user) does not exist |
+| `409` | Conflict | Reservation time-slot overlap — the court is already booked for the requested period |
+| `422` | Unprocessable Entity | Zod schema validation failure on `POST /api/canchas` |
+| `500` | Internal Server Error | Unexpected server-side error |
+
+## Endpoints Index
+
+The API exposes **11 endpoints** across four route groups:
+
+| Method | Path | Auth Required | Description |
+|--------|------|:---:|-------------|
+| `POST` | `/api/auth/register` | No | Create a new user account |
+| `POST` | `/api/auth/login` | No | Log in and receive `accessToken` + `refreshToken` |
+| `POST` | `/api/auth/refresh` | No | Exchange a refresh token for a new access token |
+| `POST` | `/api/auth/logout` | No | Nullify the stored refresh token and end the session |
+| `GET` | `/api/auth/me` | Bearer | Retrieve the currently authenticated user's profile |
+| `GET` | `/api/canchas` | Bearer | List all registered courts |
+| `GET` | `/api/canchas/:id` | Bearer | Get a single court by its ID |
+| `POST` | `/api/canchas` | Bearer | Create a new court |
+| `GET` | `/api/reservas` | Bearer | List all reservations (with court name joined) |
+| `POST` | `/api/reservas` | Bearer | Create / schedule a new reservation |
+| `GET` | `/health` | No | Service and database health check |
+
+## Swagger UI
+
+The backend ships with a bundled **Swagger UI** (OpenAPI 3.0) automatically mounted at `/docs`. Use it to browse all endpoints, inspect request/response schemas, and send test requests without any extra tooling:
+
+```
+http://localhost:8000/docs
+```
+
+<Note>
+  The Swagger document is defined in `src/swagger.ts` and covers all cancha and reserva endpoints as well as the health check. Auth routes carry `express-validator` middleware but are not currently included in the OpenAPI spec — use the curl examples in [Authentication](/api/authentication) for those.
+</Note>
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="key" href="/api/authentication">
+    Step-by-step guide to registering, logging in, refreshing tokens, and logging out.
+  </Card>
+  <Card title="Auth Endpoints" icon="lock" href="/api/auth">
+    Detailed reference for all five `/api/auth/*` routes.
+  </Card>
+  <Card title="Courts (Canchas)" icon="futbol" href="/api/canchas">
+    List, retrieve, and create sports courts.
+  </Card>
+  <Card title="Reservations (Reservas)" icon="calendar" href="/api/reservas">
+    Schedule and list court reservations.
+  </Card>
+</CardGroup>

@@ -1,47 +1,202 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with PitchPro in 5 Steps"
+sidebarTitle: "Quickstart"
+description: "Install and run PitchPro's backend API and React dashboard locally. Requires Node.js 18+ and PostgreSQL."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+This guide walks you through cloning the repository, spinning up a PostgreSQL database, launching the Express API, seeding it with sample data, and connecting the React dashboard — giving you a fully functional local environment with 20 sample courts and 20 sample bookings ready to explore.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+<Note>
+  **Prerequisites before you begin:**
+  - **Node.js 18+** and **npm** (or **yarn**) installed on your machine.
+  - **PostgreSQL** available locally, or **Docker** (recommended) to run it in a container via the included `docker-compose.yml`.
+  - A terminal with basic Git access to clone the repository.
+</Note>
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Clone and navigate">
+    Clone the repository and familiarise yourself with its two top-level directories.
 
     ```bash
-    npm install your-package
+    git clone https://github.com/JuanSerna14/Final-lenguaje-Avanzado.git
+    cd Final-lenguaje-Avanzado
     ```
+
+    The repo contains two independent projects:
+
+    ```
+    Final-lenguaje-Avanzado/
+    ├── arquimarket/        ← Express + TypeScript backend (port 8000)
+    └── starter-vite-ts/    ← React + Vite + MUI frontend (port 5173)
+    ```
+
+    Each project has its own `package.json`, dependencies, and `.env` file. Steps 2–4 configure the backend; step 5 configures the frontend.
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Start PostgreSQL">
+    The backend ships with a `docker-compose.yml` that starts a PostgreSQL 16 container with the correct credentials pre-configured.
 
     ```bash
-    your-cli init
+    cd arquimarket
+    docker compose up -d
     ```
+
+    The compose file creates a single `postgres` service with the following environment:
+
+    ```yaml
+    environment:
+      POSTGRES_DB: arquimarket      # DB_NAME
+      POSTGRES_USER: arquiuser      # DB_USER
+      POSTGRES_PASSWORD: arquipass  # DB_PASSWORD
+    ports:
+      - '5432:5432'
+    ```
+
+    A named volume (`pgdata`) persists data across container restarts. The container includes a health check that polls `pg_isready` every 10 seconds.
+
+    <Note>
+      If you prefer to use a local PostgreSQL installation instead of Docker, make sure a database and user matching the values above exist, or adjust the `.env` values in the next step accordingly.
+    </Note>
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
 
-    ```bash
-    your-cli start
+  <Step title="Set up the backend">
+    Install dependencies, create the environment file, and start the development server.
+
+    <CodeGroup>
+      ```bash npm
+      cd arquimarket
+      npm install
+      ```
+      ```bash yarn
+      cd arquimarket
+      yarn install
+      ```
+    </CodeGroup>
+
+    Create a `.env` file in the `arquimarket/` directory with the following variables:
+
+    ```bash .env
+    PORT=8000
+    DB_HOST=localhost
+    DB_PORT=5432
+    DB_NAME=arquimarket
+    DB_USER=arquiuser
+    DB_PASSWORD=arquipass
+    NODE_ENV=development
+    JWT_SECRET=secret_key_123
+    JWT_REFRESH_SECRET=refresh_secret_key_456
     ```
+
+    Then start the server in watch mode:
+
+    <CodeGroup>
+      ```bash npm
+      npm run dev
+      ```
+      ```bash yarn
+      yarn dev
+      ```
+    </CodeGroup>
+
+    On first boot, `initDatabase()` is called automatically — it runs `CREATE TABLE IF NOT EXISTS` for `canchas`, `reservas`, and `users`. You should see:
+
+    ```
+    ✅ Tablas "canchas", "reservas" y "users" verificadas/creadas.
+    🚀 Servidor corriendo en http://localhost:8000
+    📝 Documentación disponible en http://localhost:8000/docs
+    ```
+
+    | URL | What you get |
+    |----|-------------|
+    | `http://localhost:8000/health` | JSON health check: `{ "status": "OK" }` |
+    | `http://localhost:8000/docs` | Interactive Swagger UI for all endpoints |
+  </Step>
+
+  <Step title="Seed sample data">
+    With the server running, open a **new terminal tab** and run the seed script to populate the database with sample courts and bookings:
+
+    <CodeGroup>
+      ```bash npm
+      cd arquimarket
+      npm run seed
+      ```
+      ```bash yarn
+      cd arquimarket
+      yarn seed
+      ```
+    </CodeGroup>
+
+    The seed script (`src/db/seed.ts`) inserts:
+    - **20 sample canchas** — sport courts with realistic names, descriptions, and hourly prices.
+    - **20 sample reservas** — bookings distributed across those courts with varied dates, time slots, and statuses (`pendiente`, `confirmada`, `cancelada`).
+
+    After seeding, `GET http://localhost:8000/api/canchas` (with a valid token) returns the full list.
+  </Step>
+
+  <Step title="Set up the frontend">
+    In a new terminal, navigate to the frontend directory, install its dependencies, and configure the API base URL.
+
+    <CodeGroup>
+      ```bash npm
+      cd starter-vite-ts
+      npm install
+      ```
+      ```bash yarn
+      cd starter-vite-ts
+      yarn install
+      ```
+    </CodeGroup>
+
+    Create a `.env` file in the `starter-vite-ts/` directory:
+
+    ```bash .env
+    VITE_HOST_API=http://localhost:8000
+    VITE_ASSETS_API=
+    ```
+
+    `VITE_HOST_API` is picked up by the Axios instance as the base URL for every API call. `VITE_ASSETS_API` can be left blank for local development.
+
+    Start the Vite dev server:
+
+    <CodeGroup>
+      ```bash npm
+      npm run dev
+      ```
+      ```bash yarn
+      yarn dev
+      ```
+    </CodeGroup>
+
+    The dashboard is now live at **`http://localhost:5173`**. Navigate to `/auth/jwt/login` to sign in (or register a new account at `/auth/jwt/register`). After a successful login, the access token is stored in `sessionStorage` under the key `accessToken` and injected automatically into every subsequent Axios request as `Authorization: Bearer <token>`.
   </Step>
 </Steps>
 
 <Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+  **Testing protected endpoints directly from DevTools:**
+  After logging in from the frontend, you can also call protected endpoints using tools like Postman or the Swagger UI at `http://localhost:8000/docs`. To reuse your active session token from the browser console, run:
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+  ```js
+  // Retrieve the token your frontend already stored
+  sessionStorage.getItem('accessToken');
+
+  // Or set one manually (e.g. copied from a login response)
+  sessionStorage.setItem('accessToken', 'YOUR_JWT_TOKEN_HERE');
+  ```
+
+  The Axios interceptor will then include the header `Authorization: Bearer YOUR_JWT_TOKEN_HERE` on every request. If you receive a `401 Unauthorized`, check that the backend is reachable at the URL in `VITE_HOST_API` and that the token has not expired (access tokens are valid for **15 minutes**).
 </Tip>
+
+<CardGroup cols={2}>
+  <Card title="Backend Setup (detailed)" icon="gear" href="backend/setup">
+    Full environment variable reference, database connection options, and production build instructions.
+  </Card>
+  <Card title="Frontend Setup (detailed)" icon="browser" href="frontend/setup">
+    Vite config, MUI theme customisation, and routing overview for the dashboard.
+  </Card>
+  <Card title="Authentication API" icon="lock" href="api/authentication">
+    Register, login, token refresh, logout, and `/me` endpoint reference with request/response examples.
+  </Card>
+  <Card title="Docker Deployment" icon="docker" href="deployment/docker">
+    Containerise both services and run the full stack with a single `docker compose up`.
+  </Card>
+</CardGroup>

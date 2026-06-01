@@ -1,0 +1,209 @@
+---
+title: "Environment Variables Reference for PitchPro"
+sidebarTitle: "Environment Variables"
+description: "Complete reference for all .env variables in PitchPro's backend (Express) and frontend (Vite). Required fields, defaults, and production guidance."
+---
+
+PitchPro uses environment variables to configure database connections, JWT secrets, server ports, and API URLs. Both the backend (`arquimarket/`) and the frontend (`starter-vite-ts/`) need their own `.env` files — neither project ships a `.env` in version control, so you must create them before running the application.
+
+---
+
+## Backend Variables (`arquimarket/.env`)
+
+The Express backend loads its configuration via `dotenv` at startup (`dotenv.config()` in `src/main.ts`). The variables below control the database connection and authentication token signing.
+
+### Server
+
+<ParamField path="PORT" type="number" default="8000">
+  The port on which the Express server listens. Change this if port `8000` is already in use on your machine.
+
+  ```env
+  PORT=8000
+  ```
+</ParamField>
+
+<ParamField path="NODE_ENV" type="string" default="development">
+  Runtime environment. Accepted values: `development` | `production`. Affects logging verbosity and certain middleware behaviours.
+
+  ```env
+  NODE_ENV=development
+  ```
+</ParamField>
+
+### Database
+
+<ParamField path="DB_HOST" type="string" required>
+  Hostname or IP address of your PostgreSQL server. Use `localhost` when running the database via Docker Compose on the same machine.
+
+  ```env
+  DB_HOST=localhost
+  ```
+</ParamField>
+
+<ParamField path="DB_PORT" type="number" required>
+  TCP port PostgreSQL is listening on. The standard PostgreSQL default is `5432` and matches the port mapping in `docker-compose.yml`.
+
+  ```env
+  DB_PORT=5432
+  ```
+</ParamField>
+
+<ParamField path="DB_NAME" type="string" required>
+  Name of the PostgreSQL database to connect to. Docker Compose will create this database automatically on first start using the value of this variable.
+
+  ```env
+  DB_NAME=arquimarket
+  ```
+</ParamField>
+
+<ParamField path="DB_USER" type="string" required>
+  PostgreSQL username. Docker Compose creates this user automatically on first container start.
+
+  ```env
+  DB_USER=arquiuser
+  ```
+</ParamField>
+
+<ParamField path="DB_PASSWORD" type="string" required>
+  Password for the PostgreSQL user. Also used by Docker Compose to initialise the container. **Change this before deploying to production.**
+
+  ```env
+  DB_PASSWORD=arquipass
+  ```
+</ParamField>
+
+### Authentication (JWT)
+
+PitchPro uses a two-token auth strategy: short-lived **access tokens** (15 minutes) signed with `JWT_SECRET`, and long-lived **refresh tokens** (7 days) signed with `JWT_REFRESH_SECRET`. The two secrets must be different strings.
+
+<ParamField path="JWT_SECRET" type="string" default="secret_key_123">
+  Signs and verifies access tokens (Bearer tokens sent in `Authorization` headers). Access tokens expire after **15 minutes**.
+
+  The fallback value `secret_key_123` is hard-coded in `src/modules/auth/auth.controller.ts` and `src/middlewares/verifyToken.ts` — **never use this default in production**.
+
+  ```env
+  JWT_SECRET=your_strong_secret_here
+  ```
+</ParamField>
+
+<ParamField path="JWT_REFRESH_SECRET" type="string" default="refresh_secret_key_456">
+  Signs and verifies refresh tokens stored in the `users` table. Refresh tokens expire after **7 days**.
+
+  Must be a different value from `JWT_SECRET`. The fallback `refresh_secret_key_456` is for development convenience only.
+
+  ```env
+  JWT_REFRESH_SECRET=your_strong_refresh_secret_here
+  ```
+</ParamField>
+
+### Complete Backend Example
+
+Copy this block into `arquimarket/.env` and replace the placeholder values:
+
+```env
+# Server
+PORT=8000
+NODE_ENV=development
+
+# Database
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=arquimarket
+DB_USER=arquiuser
+DB_PASSWORD=arquipass
+
+# JWT
+JWT_SECRET=your_secret_here
+JWT_REFRESH_SECRET=your_refresh_secret_here
+```
+
+---
+
+## Frontend Variables (`starter-vite-ts/.env`)
+
+The Vite frontend uses environment variables prefixed with `VITE_` — only variables with this prefix are bundled into the client build and accessible via `import.meta.env`. Variables without the prefix are ignored by Vite.
+
+<ParamField path="VITE_HOST_API" type="string" required>
+  Base URL of the PitchPro backend API. All `axios` requests in the frontend are prefixed with this value.
+
+  - **Local development**: point to your running Express server.
+  - **Production**: point to your deployed API URL (e.g. `https://api.pitchpro.example.com`).
+
+  ```env
+  VITE_HOST_API=http://localhost:8000
+  ```
+</ParamField>
+
+<ParamField path="VITE_ASSETS_API" type="string">
+  Optional base URL for static assets served separately from the main API (e.g. an S3 bucket or CDN). Can be left empty if you are not serving assets from a separate origin.
+
+  ```env
+  VITE_ASSETS_API=
+  ```
+</ParamField>
+
+<Note>
+  Vite **only** exposes variables prefixed with `VITE_` to browser code. Variables without this prefix (e.g. `API_KEY=...`) are intentionally kept server-side and will be `undefined` in `import.meta.env`. See the [Vite env docs](https://vitejs.dev/guide/env-and-mode) for details.
+</Note>
+
+### Complete Frontend Example
+
+Copy this block into `starter-vite-ts/.env`:
+
+```env
+VITE_HOST_API=http://localhost:8000
+VITE_ASSETS_API=
+```
+
+For production, update `VITE_HOST_API` to the deployed backend URL before running `npm run build`.
+
+---
+
+## Production Checklist
+
+<Warning>
+  The default values shipped in the example `.env` files are **not secure**. Before deploying PitchPro to any public-facing environment, complete all of the following:
+
+  - **Change `JWT_SECRET`** to a strong, random string of at least 32 characters. See [Generating Secure Secrets](#generating-secure-secrets) below.
+  - **Change `JWT_REFRESH_SECRET`** to a *different* strong random string (also 32+ characters). Using the same value for both secrets weakens the two-token security model.
+  - **Change `DB_PASSWORD`** to a secure password. Never use `arquipass` in production.
+  - **Set `VITE_HOST_API`** to your production API URL (e.g. `https://api.pitchpro.example.com`) before building the frontend. A build compiled with `http://localhost:8000` will not work in production.
+  - **Set `NODE_ENV=production`** on the backend to enable production-mode Express behaviour.
+  - **Do not commit `.env` files** to version control. Ensure `.env` is listed in your `.gitignore`.
+</Warning>
+
+---
+
+## Generating Secure Secrets
+
+Use Node.js's built-in `crypto` module to generate cryptographically secure random strings for your JWT secrets:
+
+```bash
+# Generate a 32-byte (64 hex character) random secret — run twice for JWT_SECRET and JWT_REFRESH_SECRET
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Example output (generate a fresh pair — never reuse these):
+
+```
+a3f1c2e8b74d906a1f5e3c2d8b0a7f4e1c6d9b2e5a8f3c0d7b4e1a9f6c3d0b7
+```
+
+Run the command twice and assign the two different outputs to `JWT_SECRET` and `JWT_REFRESH_SECRET` respectively.
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Docker Compose" icon="docker" href="/deployment/docker">
+    Start a local PostgreSQL instance with Docker Compose using the DB_* variables defined here.
+  </Card>
+  <Card title="Backend Setup" icon="server" href="/backend/setup">
+    Install backend dependencies, apply the database schema, and start the Express server.
+  </Card>
+  <Card title="Frontend Setup" icon="browser" href="/frontend/setup">
+    Configure VITE_HOST_API and run the Vite + React development server.
+  </Card>
+  <Card title="Backend Configuration" icon="sliders" href="/backend/configuration">
+    Deep-dive into Express middleware, CORS settings, and JWT token lifecycle.
+  </Card>
+</CardGroup>

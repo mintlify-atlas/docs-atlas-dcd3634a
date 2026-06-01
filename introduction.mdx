@@ -1,0 +1,107 @@
+---
+title: "PitchPro: Sports Court Reservation System Overview"
+sidebarTitle: "Introduction"
+description: "PitchPro is a full-stack sports court booking platform. Learn its architecture, core features, and the two projects that make up the system."
+---
+
+PitchPro (also known as **ArquiMarket**) is a full-stack sports court reservation platform that solves the real-world problem of managing court rentals end-to-end. It provides a structured way to list available courts, accept bookings with conflict detection, and manage users — all through a clean REST API backed by a React dashboard. The system is composed of two independently runnable projects: a TypeScript/Express backend and a React/Vite frontend, designed to work together over HTTP.
+
+## What is PitchPro?
+
+PitchPro connects sports facility managers to their customers through a straightforward booking flow. The backend exposes a secured REST API that handles authentication, court management, and reservation scheduling. The frontend gives users a polished Material UI dashboard to browse courts and place bookings directly from the browser.
+
+<CardGroup cols={2}>
+  <Card title="Backend — arquimarket" icon="server" href="backend/setup">
+    Express + TypeScript REST API running on port **8000**. Handles JWT authentication, PostgreSQL persistence, Zod validation, and exposes interactive Swagger docs at `/docs`.
+  </Card>
+  <Card title="Frontend — starter-vite-ts" icon="browser" href="frontend/setup">
+    React 18 + Vite + Material UI v5 dashboard on port **5173**. Fetches data via Axios with automatic Bearer token injection, state managed by TanStack Query v5.
+  </Card>
+</CardGroup>
+
+## Core concepts
+
+PitchPro is built around three main data entities. Every feature in the system maps back to one of these:
+
+| Entity | Spanish term | Description |
+|--------|-------------|-------------|
+| **Users** | `users` | Registered accounts used for authentication. Passwords are hashed with bcryptjs; each user stores a `refresh_token` for silent re-authentication. |
+| **Courts** | `canchas` | The physical sport spaces available for rent. Each cancha has a name, description, hourly price, and an active/inactive flag. |
+| **Bookings** | `reservas` | A time-slot reservation linking a client to a specific court on a given date. Tracks status (`pendiente`, `confirmada`, `cancelada`) and origin (`interfaz`, `whatsapp`). |
+
+<Note>
+  The backend enforces referential integrity between **reservas** and **canchas** via a PostgreSQL foreign key, and uses `CHECK` constraints to validate `estado`, `origen`, and that `hora_fin > hora_inicio` before any record is written.
+</Note>
+
+## Technology stack
+
+<Tabs>
+  <Tab title="Backend">
+    | Package | Version | Role |
+    |---------|---------|------|
+    | `express` | ^4.19.2 | HTTP server and router |
+    | `typescript` | ^5.4.5 | Static typing and compilation |
+    | `pg` | ^8.12.0 | PostgreSQL client (node-postgres) |
+    | `bcryptjs` | ^3.0.3 | Password hashing (10-round salt) |
+    | `jsonwebtoken` | ^9.0.3 | Access token (15 min) and refresh token (7 days) generation |
+    | `zod` | ^3.23.8 | Schema validation for request bodies |
+    | `swagger-ui-express` | ^5.0.1 | Interactive API docs at `/docs` |
+    | `dotenv` | ^16.4.5 | Environment variable loading |
+    | `cors` | ^2.8.5 | Cross-origin resource sharing |
+    | `express-validator` | ^7.3.2 | Input validation for auth routes |
+    | `ts-node` | ^10.9.2 | Direct TypeScript execution in dev |
+  </Tab>
+  <Tab title="Frontend">
+    | Package | Version | Role |
+    |---------|---------|------|
+    | `react` | ^18.2.0 | UI library |
+    | `vite` | ^5.0.7 | Build tool and dev server |
+    | `@mui/material` | ^5.14.20 | Material UI component library |
+    | `@tanstack/react-query` | ^5.100.14 | Server state, caching, and data fetching |
+    | `axios` | ^1.6.2 | HTTP client with Bearer token interceptor |
+    | `react-router-dom` | ^6.20.1 | Client-side routing |
+    | `react-hook-form` | ^7.48.2 | Form state and validation |
+    | `@hookform/resolvers` | ^3.3.2 | Schema-based form validation (Yup) |
+    | `typescript` | ^5.3.3 | Static typing |
+    | `@emotion/react` + `styled` | ^11.11.x | MUI styling engine |
+  </Tab>
+</Tabs>
+
+## API endpoints at a glance
+
+All endpoints are prefixed with the base URL `http://localhost:8000`. Endpoints under `/api/canchas` and `/api/reservas` require a valid JWT Bearer token in the `Authorization` header.
+
+| Method | Path | Auth Required | Description |
+|--------|------|:-------------:|-------------|
+| `GET` | `/health` | No | Service health check |
+| `POST` | `/api/auth/register` | No | Register a new user |
+| `POST` | `/api/auth/login` | No | Log in, receive access + refresh tokens |
+| `POST` | `/api/auth/refresh` | No | Exchange refresh token for new access token |
+| `POST` | `/api/auth/logout` | No | Invalidate refresh token |
+| `GET` | `/api/auth/me` | No* | Get current user profile (reads Bearer token) |
+| `GET` | `/api/canchas` | **Yes** | List all courts |
+| `GET` | `/api/canchas/:id` | **Yes** | Get a single court by ID |
+| `POST` | `/api/canchas` | **Yes** | Create a new court |
+| `GET` | `/api/reservas` | **Yes** | List all bookings |
+| `POST` | `/api/reservas` | **Yes** | Create a new booking |
+
+<Note>
+  `GET /api/auth/me` reads the `Authorization: Bearer` header directly but is not routed through the `verifyToken` middleware mount — it performs its own token verification internally.
+</Note>
+
+## Explore further
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="quickstart">
+    Get the full stack running locally in under 10 minutes, including database setup and seed data.
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="architecture">
+    Understand the database schema, JWT flow, and the module layout behind the API.
+  </Card>
+  <Card title="Backend Setup" icon="gear" href="backend/setup">
+    Detailed configuration guide for the Express API, environment variables, and Docker Compose.
+  </Card>
+  <Card title="API Overview" icon="code" href="api/overview">
+    Full reference for all 11 endpoints with request/response examples.
+  </Card>
+</CardGroup>

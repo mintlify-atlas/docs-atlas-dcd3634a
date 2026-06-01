@@ -1,0 +1,275 @@
+---
+title: "JWT Authentication Implementation in PitchPro Backend"
+sidebarTitle: "Authentication"
+description: "How PitchPro implements JWT authentication: registration, login, access tokens, refresh tokens, logout, and the verifyToken middleware."
+---
+
+PitchPro uses a **dual-token JWT strategy** to balance security and usability. A short-lived access token is sent with every API request, while a longer-lived refresh token — stored server-side in the `users` table — allows the client to obtain a new access token without requiring the user to log in again. All authentication routes live under `/api/auth` and are handled by `src/modules/auth/auth.controller.ts`.
+
+## Token Strategy
+
+| | Access Token | Refresh Token |
+|---|---|---|
+| **Signed with** | `JWT_SECRET` (env var, default `secret_key_123`) | `JWT_REFRESH_SECRET` (env var, default `refresh_secret_key_456`) |
+| **Expiry** | 15 minutes | 7 days |
+| **Payload** | `{ id, email }` | `{ id }` |
+| **Stored in DB?** | No | Yes — in `users.refresh_token` column |
+| **Used for** | Authorizing protected API requests | Issuing a new access token |
+
+<Warning>
+  The default values for `JWT_SECRET` (`secret_key_123`) and `JWT_REFRESH_SECRET` (`refresh_secret_key_456`) are hardcoded fallbacks for local development only. **You must override both with strong, randomly generated secrets in any production or staging environment.** See [Configuration](/backend/configuration) for details.
+</Warning>
+
+## Registration Flow
+
+<Steps>
+
+### Send a POST request to `/api/auth/register`
+
+```json
+{
+  "nombre": "Ana García",
+  "email": "ana@pitchpro.com",
+  "password": "mypassword123"
+}
+```
+
+### Input validation via express-validator
+
+The `validateRegister` middleware enforces:
+- `nombre` — must not be empty
+- `email` — must be a valid email address
+- `password` — minimum 6 characters
+
+If validation fails, a `400` response is returned with a structured `errors` array.
+
+### Email uniqueness check
+
+The controller queries `SELECT * FROM users WHERE email = $1`. If a row is found, it returns `400` with `{ errors: [{ msg: "El email ya está registrado" }] }`.
+
+### Password hashing
+
+```typescript
+const salt = await bcrypt.genSalt(10);
+const hashedPassword = await bcrypt.hash(password, salt);
+```
+
+`bcryptjs` generates a salt with **10 rounds** and hashes the password before it is ever written to the database.
+
+### Insert the user
+
+```sql
+INSERT INTO users (nombre, email, password)
+VALUES ($1, $2, $3)
+RETURNING id, nombre, email
+```
+
+The raw password is never persisted — only the bcrypt hash.
+
+### Response
+
+```json
+{
+  "user": {
+    "id": 1,
+    "nombre": "Ana García",
+    "email": "ana@pitchpro.com"
+  }
+}
+```
+
+HTTP status `201 Created`. No tokens are returned at registration — the user must log in separately.
+
+</Steps>
+
+## Login Flow
+
+<Steps>
+
+### Send a POST request to `/api/auth/login`
+
+```json
+{
+  "email": "ana@pitchpro.com",
+  "password": "mypassword123"
+}
+```
+
+### Input validation via express-validator
+
+The `validateLogin` middleware checks that `email` is a valid email format and `password` is not empty. Validation failures return `400`.
+
+### User lookup
+
+```sql
+SELECT * FROM users WHERE email = $1
+```
+
+If no user is found, returns `400` with `{ errors: [{ msg: "Credenciales inválidas" }] }` — the same generic message used for a wrong password, to prevent user enumeration.
+
+### Password verification
+
+```typescript
+const validPassword = await bcrypt.compare(password, user.password);
+```
+
+`bcrypt.compare` rehashes the submitted password with the stored salt and compares it to the stored hash. If it does not match, returns `400`.
+
+### Sign both tokens
+
+```typescript
+const accessToken = jwt.sign(
+  { id: user.id, email: user.email },
+  JWT_SECRET,
+  { expiresIn: '15m' }
+);
+
+const refreshToken = jwt.sign(
+  { id: user.id },
+  JWT_REFRESH_SECRET,
+  { expiresIn: '7d' }
+);
+```
+
+### Persist the refresh token
+
+```sql
+UPDATE users SET refresh_token = $1 WHERE id = $2
+```
+
+Storing the refresh token server-side means it can be revoked at any time (e.g., on logout or suspicious activity).
+
+### Response
+
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR...",
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR...",
+  "user": {
+    "id": 1,
+    "nombre": "Ana García",
+    "email": "ana@pitchpro.com"
+  }
+}
+```
+
+</Steps>
+
+## Token Refresh
+
+When the access token expires, the client sends the refresh token to obtain a new one — without requiring the user to re-enter credentials.
+
+**Endpoint:** `POST /api/auth/refresh`
+
+```json
+{
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR..."
+}
+```
+
+**Flow:**
+
+1. The controller verifies the JWT signature using `JWT_REFRESH_SECRET`.
+2. It then queries the database: `SELECT * FROM users WHERE id = $1 AND refresh_token = $2` — the token must be both cryptographically valid *and* match what is stored in the database.
+3. If both checks pass, a new access token is signed (`expiresIn: '15m'`) and returned.
+
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR..."
+}
+```
+
+If the refresh token is missing, cryptographically invalid, or not found in the database, the endpoint returns `401` or `403` respectively.
+
+## Logout
+
+**Endpoint:** `POST /api/auth/logout`
+
+```json
+{
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR..."
+}
+```
+
+The controller runs:
+
+```sql
+UPDATE users SET refresh_token = NULL WHERE refresh_token = $1
+```
+
+This **nullifies the stored refresh token**, making it permanently unusable for token refresh even if the JWT itself has not yet expired. The client should also discard both tokens locally.
+
+**Success response:**
+
+```json
+{
+  "message": "Logout exitoso"
+}
+```
+
+## `verifyToken` Middleware
+
+All routes under `/api/canchas` and `/api/reservas` are protected by the `verifyToken` middleware defined in `src/middlewares/verifyToken.ts`:
+
+```typescript src/middlewares/verifyToken.ts
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'secret_key_123';
+
+export const verifyToken = (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ message: 'Acceso denegado. Token no proporcionado.' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    // Attach decoded payload to the request for downstream use
+    (req as any).user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ message: 'Token inválido o expirado' });
+  }
+};
+```
+
+**How it works:**
+
+1. Reads the `Authorization` header and checks it starts with `Bearer `.
+2. Extracts the token string after the space.
+3. Calls `jwt.verify(token, JWT_SECRET)` — this validates the signature and expiry in one step.
+4. On success, attaches the decoded payload (`{ id, email, iat, exp }`) to `req.user` so route handlers can access the authenticated user's identity.
+5. On failure (missing header, invalid signature, or expired token), returns `401` immediately and does not call `next()`.
+
+**Applied in `src/main.ts`:**
+
+```typescript
+app.use('/api/canchas',  verifyToken, canchasRouter);
+app.use('/api/reservas', verifyToken, reservasRouter);
+```
+
+The `/api/auth` routes are explicitly **not** guarded by `verifyToken` — registration, login, and refresh must be accessible without an existing token.
+
+## Environment Variables
+
+<Warning>
+  The fallback secrets in the source code (`secret_key_123` and `refresh_secret_key_456`) exist only for local development convenience. In production, set `JWT_SECRET` and `JWT_REFRESH_SECRET` to long, randomly generated strings (at least 32 characters). Anyone who knows these secrets can forge valid JWTs for any user.
+</Warning>
+
+| Variable | Default (dev only) | Purpose |
+|---|---|---|
+| `JWT_SECRET` | `secret_key_123` | Signs and verifies access tokens |
+| `JWT_REFRESH_SECRET` | `refresh_secret_key_456` | Signs and verifies refresh tokens |
+
+<CardGroup cols={2}>
+  <Card title="Auth API Reference" icon="key" href="/api/auth">
+    Full request/response specs for every /api/auth endpoint.
+  </Card>
+  <Card title="Frontend Auth Flow" icon="user" href="/frontend/auth-flow">
+    How the frontend stores tokens and handles expiry.
+  </Card>
+</CardGroup>

@@ -1,0 +1,180 @@
+---
+title: "PostgreSQL Database Schema and Connection Setup"
+sidebarTitle: "Database"
+description: "PitchPro uses PostgreSQL via the pg driver. Learn the three-table schema, connection pool config, and how the database initializes on startup."
+---
+
+PitchPro manages all persistent data — courts, reservations, and users — in a PostgreSQL database. On every server startup, `initDatabase()` is called before the HTTP server begins accepting requests. It runs `CREATE TABLE IF NOT EXISTS` for all three tables, so the schema is always up to date with zero manual migration steps required.
+
+## Connection
+
+The database connection is managed by a single shared `Pool` instance from the `pg` driver, configured from environment variables:
+
+```typescript src/db/connection.ts
+import { Pool } from 'pg';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+export const pool = new Pool({
+  host:     process.env.DB_HOST,
+  port:     Number(process.env.DB_PORT),
+  database: process.env.DB_NAME,
+  user:     process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  max:               10,     // maximum simultaneous connections
+  idleTimeoutMillis: 30000,  // close idle connections after 30 s
+});
+```
+
+The `pool` is exported from `src/db/connection.ts` and imported directly by every repository and the `initDatabase` function. Rather than opening a new TCP connection per request, the pool keeps up to **10 connections** open and lends them out as needed — dramatically reducing latency under concurrent load.
+
+<Note>
+  A `checkConnection()` helper also lives in `connection.ts`. It runs `SELECT 1` against the pool and returns `true` or `false`, used by the `/health` endpoint to verify the database is reachable.
+</Note>
+
+## Schema
+
+All three tables are created by `initDatabase()` in `src/db/init.ts`. The exact SQL is shown below:
+
+```sql src/db/init.ts
+-- Sports courts available for booking
+CREATE TABLE IF NOT EXISTS canchas (
+  id          SERIAL PRIMARY KEY,
+  nombre      VARCHAR(100)   NOT NULL,
+  descripcion TEXT,
+  precio_hora DECIMAL(10, 2) NOT NULL,
+  activa      BOOLEAN        DEFAULT true,
+  created_at  TIMESTAMPTZ    DEFAULT NOW()
+);
+
+-- Bookings placed against a specific court
+CREATE TABLE IF NOT EXISTS reservas (
+  id             SERIAL PRIMARY KEY,
+  cancha_id      INTEGER        NOT NULL REFERENCES canchas(id),
+  fecha          DATE           NOT NULL,
+  hora_inicio    TIME           NOT NULL,
+  hora_fin       TIME           NOT NULL,
+  nombre_cliente VARCHAR(255)   NOT NULL,
+  telefono       VARCHAR(20)    NOT NULL,
+  estado         VARCHAR(20)    DEFAULT 'pendiente',
+  origen         VARCHAR(20)    DEFAULT 'interfaz',
+  created_at     TIMESTAMPTZ    DEFAULT NOW(),
+  CONSTRAINT estado_valido CHECK (estado IN ('pendiente','confirmada','cancelada')),
+  CONSTRAINT origen_valido CHECK (origen IN ('whatsapp','interfaz')),
+  CONSTRAINT hora_valida   CHECK (hora_fin > hora_inicio)
+);
+
+-- Registered users (admin / staff)
+CREATE TABLE IF NOT EXISTS users (
+  id            SERIAL PRIMARY KEY,
+  nombre        VARCHAR(100)  NOT NULL,
+  email         VARCHAR(255)  UNIQUE NOT NULL,
+  password      VARCHAR(255)  NOT NULL,
+  refresh_token TEXT,
+  created_at    TIMESTAMPTZ   DEFAULT NOW()
+);
+```
+
+### `users`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `SERIAL` | Auto-incrementing primary key |
+| `nombre` | `VARCHAR(100)` | Display name, required |
+| `email` | `VARCHAR(255)` | Unique — used as login identifier |
+| `password` | `VARCHAR(255)` | bcrypt hash (salt rounds = 10), never stored as plain text |
+| `refresh_token` | `TEXT` | Nullable — populated on login, nullified on logout |
+| `created_at` | `TIMESTAMPTZ` | Server timestamp at row creation |
+
+### `canchas`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `SERIAL` | Auto-incrementing primary key |
+| `nombre` | `VARCHAR(100)` | Court display name, required |
+| `descripcion` | `TEXT` | Optional free-text description |
+| `precio_hora` | `DECIMAL(10,2)` | Hourly rate with two decimal places (e.g. `45.00`) |
+| `activa` | `BOOLEAN` | Whether the court accepts bookings; defaults to `true` |
+| `created_at` | `TIMESTAMPTZ` | Server timestamp at row creation |
+
+### `reservas`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `SERIAL` | Auto-incrementing primary key |
+| `cancha_id` | `INTEGER` | Foreign key → `canchas(id)`. PostgreSQL enforces referential integrity. |
+| `fecha` | `DATE` | Booking date in `YYYY-MM-DD` format (e.g. `2025-06-15`) |
+| `hora_inicio` | `TIME` | Start time in `HH:MM:SS` format (e.g. `09:00:00`) |
+| `hora_fin` | `TIME` | End time — must be after `hora_inicio` (enforced by `CONSTRAINT hora_valida`) |
+| `nombre_cliente` | `VARCHAR(255)` | Full name of the customer making the booking |
+| `telefono` | `VARCHAR(20)` | Customer contact number |
+| `estado` | `VARCHAR(20)` | Booking status — `pendiente` (default), `confirmada`, or `cancelada` |
+| `origen` | `VARCHAR(20)` | Source channel — `whatsapp` or `interfaz` (default) |
+| `created_at` | `TIMESTAMPTZ` | Server timestamp at row creation |
+
+## Data Types
+
+| PostgreSQL type | Usage in PitchPro | Example |
+|---|---|---|
+| `DATE` | Reservation date only, no time component | `2025-06-15` |
+| `TIME` | Start/end times only, no date component | `09:00:00` |
+| `DECIMAL(10,2)` | Hourly pricing with exact decimal precision | `45.00` |
+| `TIMESTAMPTZ` | Full timestamp with timezone for audit columns | `2025-06-15T14:30:00Z` |
+| `REFERENCES` | Foreign key — PostgreSQL rejects inserts that reference a non-existent court | `REFERENCES canchas(id)` |
+| `CHECK` | Inline constraint — PostgreSQL rejects rows that violate the rule | `hora_fin > hora_inicio` |
+
+The overlap detection query in `reservas.repository.ts` uses the PostgreSQL `OVERLAPS` operator to check whether a new booking's time range conflicts with any existing non-cancelled reservation on the same court and date.
+
+## Seeding
+
+```bash
+npm run seed
+```
+
+The seed script (`src/db/seed.ts`) populates the database with **20 sample courts** and **20 sample reservations** for development and testing. Both inserts run inside separate PostgreSQL transactions — if any individual `INSERT` fails, the whole batch is rolled back.
+
+The script is **idempotent**: it queries `COUNT(*)` on each table before inserting. If rows already exist in `canchas`, the court seed is skipped. Likewise for `reservas`. This makes it safe to run multiple times without duplicating data.
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Connection refused — ECONNREFUSED">
+    PostgreSQL is not running or is listening on a different host/port.
+
+    **Steps to resolve:**
+    1. Verify PostgreSQL is running: `pg_isready -h localhost -p 5432`
+    2. Check `DB_HOST` and `DB_PORT` in your `.env` match where PostgreSQL is actually bound.
+    3. If using Docker, ensure the container is started and the port is published: `docker ps | grep postgres`
+  </Accordion>
+
+  <Accordion title="Authentication failed — password authentication failed for user">
+    The database user credentials in `.env` do not match what PostgreSQL expects.
+
+    **Steps to resolve:**
+    1. Confirm `DB_USER` and `DB_PASSWORD` are correct.
+    2. Check `pg_hba.conf` — the authentication method for the user/host combination must allow password auth (`md5` or `scram-sha-256`).
+    3. If the user does not exist, create it: `CREATE USER arquiuser WITH PASSWORD 'arquipass';` and grant access: `GRANT ALL PRIVILEGES ON DATABASE arquimarket TO arquiuser;`
+  </Accordion>
+
+  <Accordion title='Table "canchas" (or "reservas" / "users") does not exist'>
+    The server has not yet run `initDatabase()`, or it ran against a different database.
+
+    **Steps to resolve:**
+    1. Start the server with `npm run dev` — `initDatabase()` runs automatically before the HTTP server starts and creates all tables via `CREATE TABLE IF NOT EXISTS`.
+    2. Confirm `DB_NAME` in `.env` points to the correct database.
+    3. Check server logs for the confirmation message: `✅ Tablas "canchas", "reservas" y "users" verificadas/creadas.`
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="Backend Setup" icon="rocket" href="/backend/setup">
+    Install dependencies, configure environment, and start the server.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/backend/configuration">
+    Full reference for every environment variable.
+  </Card>
+  <Card title="Docker Deployment" icon="docker" href="/deployment/docker">
+    Run PitchPro and PostgreSQL together with Docker Compose.
+  </Card>
+</CardGroup>

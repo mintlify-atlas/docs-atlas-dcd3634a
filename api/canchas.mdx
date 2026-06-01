@@ -1,0 +1,288 @@
+---
+title: "Courts API — GET and POST /api/canchas"
+sidebarTitle: "Canchas"
+description: "REST endpoints for listing, retrieving, and creating sports courts (canchas) in PitchPro. All endpoints require a valid JWT Bearer token."
+---
+
+The `/api/canchas` endpoints manage sports courts (*canchas*) — the bookable venues in PitchPro. All three routes are mounted behind the `verifyToken` middleware in `main.ts`, meaning every request must supply a valid JWT Bearer token in the `Authorization` header.
+
+---
+
+## GET /api/canchas
+
+Returns an ordered list of every court in the database (`ORDER BY id ASC`).
+
+### Authentication
+
+All `/api/canchas` requests require `Authorization: Bearer <accessToken>`.
+
+### Example request
+
+```bash
+curl http://localhost:8000/api/canchas \
+  -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIs...'
+```
+
+### Response — 200 OK
+
+```json
+{
+  "ok": true,
+  "total": 2,
+  "data": [
+    {
+      "id": 1,
+      "nombre": "Sintética Central",
+      "descripcion": "Cancha de fútbol 5 con iluminación",
+      "precio_hora": "80000.00",
+      "activa": true,
+      "created_at": "2025-06-01T00:00:00.000Z"
+    },
+    {
+      "id": 2,
+      "nombre": "Cancha Rápida Norte",
+      "descripcion": null,
+      "precio_hora": "55000.00",
+      "activa": true,
+      "created_at": "2025-06-02T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+<ResponseField name="ok" type="boolean">
+  Always `true` on a successful response.
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Count of courts returned in `data`. Equals `data.length`.
+</ResponseField>
+
+<ResponseField name="data" type="Cancha[]">
+  <Expandable title="Cancha object fields">
+    <ResponseField name="id" type="number">
+      Auto-incremented primary key of the court.
+    </ResponseField>
+    <ResponseField name="nombre" type="string">
+      The court's display name (up to 100 characters).
+    </ResponseField>
+    <ResponseField name="descripcion" type="string | null">
+      Optional free-text description of the court. `null` if not provided.
+    </ResponseField>
+    <ResponseField name="precio_hora" type="string">
+      Hourly rate as a decimal string (e.g. `"80000.00"`). PostgreSQL `DECIMAL` columns are serialised as strings by the `pg` driver.
+    </ResponseField>
+    <ResponseField name="activa" type="boolean">
+      `true` if the court is currently available for booking.
+    </ResponseField>
+    <ResponseField name="created_at" type="string">
+      ISO 8601 UTC timestamp of when the court was added to the database.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error codes
+
+| Code | Meaning |
+|------|---------|
+| `401` | Missing or invalid Bearer token |
+| `500` | Internal server error |
+
+---
+
+## GET /api/canchas/:id
+
+Fetches a single court by its integer primary key.
+
+### Authentication
+
+Requires `Authorization: Bearer <accessToken>`.
+
+### Path parameters
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the court. Must be a positive integer. Non-numeric or zero values return `400`.
+</ParamField>
+
+### Example request
+
+```bash
+curl http://localhost:8000/api/canchas/1 \
+  -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIs...'
+```
+
+### Response — 200 OK
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": 1,
+    "nombre": "Sintética Central",
+    "descripcion": "Cancha de fútbol 5 con iluminación",
+    "precio_hora": "80000.00",
+    "activa": true,
+    "created_at": "2025-06-01T00:00:00.000Z"
+  }
+}
+```
+
+<ResponseField name="ok" type="boolean">
+  Always `true` on a successful response.
+</ResponseField>
+
+<ResponseField name="data" type="Cancha">
+  <Expandable title="Cancha object fields">
+    <ResponseField name="id" type="number">
+      The court's primary key.
+    </ResponseField>
+    <ResponseField name="nombre" type="string">
+      The court's display name.
+    </ResponseField>
+    <ResponseField name="descripcion" type="string | null">
+      Optional description. `null` if not set.
+    </ResponseField>
+    <ResponseField name="precio_hora" type="string">
+      Hourly rate as a decimal string from PostgreSQL.
+    </ResponseField>
+    <ResponseField name="activa" type="boolean">
+      Whether the court is currently active.
+    </ResponseField>
+    <ResponseField name="created_at" type="string">
+      ISO 8601 UTC creation timestamp.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error codes
+
+| Code | Meaning |
+|------|---------|
+| `400` | `id` path segment is not a positive integer — `{ ok: false, mensaje: "El ID debe ser un número positivo" }` |
+| `401` | Missing or invalid Bearer token |
+| `404` | No court found with that ID — `{ ok: false, mensaje: "Cancha con ID <id> no encontrada" }` (thrown as `CanchaNoEncontradaError`) |
+| `500` | Internal server error |
+
+---
+
+## POST /api/canchas
+
+Creates a new court record. The request body is validated with the Zod schema `CrearCanchaSchema` defined in `canchas.types.ts`. Any Zod validation failure returns `422` with a structured error array.
+
+### Authentication
+
+Requires `Authorization: Bearer <accessToken>`.
+
+### Request body
+
+<ParamField body="nombre" type="string" required>
+  The court's display name. Must be at least 1 character and no more than 100 characters.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Optional free-text description (e.g. surface type, lighting, capacity). Omit or pass `null` to leave blank.
+</ParamField>
+
+<ParamField body="precio_hora" type="number" required>
+  Hourly rental rate in the local currency. Must be a positive number greater than 0. Send as a JS `number` in the JSON body (e.g. `80000`). The database stores it as `DECIMAL` and the API returns it as a string.
+</ParamField>
+
+<ParamField body="activa" type="boolean">
+  Whether the court should be immediately available for booking. Defaults to `true` if omitted.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST http://localhost:8000/api/canchas \
+  -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIs...' \
+  -H 'Content-Type: application/json' \
+  -d '{"nombre": "Sintética Central", "descripcion": "Con iluminación", "precio_hora": 80000, "activa": true}'
+```
+
+### Response — 201 Created
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": 3,
+    "nombre": "Sintética Central",
+    "descripcion": "Con iluminación",
+    "precio_hora": "80000.00",
+    "activa": true,
+    "created_at": "2025-06-15T14:22:00.000Z"
+  }
+}
+```
+
+<ResponseField name="ok" type="boolean">
+  Always `true` on successful creation.
+</ResponseField>
+
+<ResponseField name="data" type="Cancha">
+  The newly created court object returned from `RETURNING *`, including the auto-assigned `id` and `created_at` timestamp.
+</ResponseField>
+
+<Note>
+  `precio_hora` is sent as a JS **number** in the request body (e.g. `80000`) but is always returned as a **string** (e.g. `"80000.00"`) in responses, because the PostgreSQL `DECIMAL` type is serialised as a string by the `pg` driver to preserve precision.
+</Note>
+
+### Response — 422 Unprocessable Entity
+
+Returned when the body fails `CrearCanchaSchema` Zod parsing.
+
+```json
+{
+  "ok": false,
+  "mensaje": "Datos de entrada inválidos",
+  "errores": [
+    { "campo": "nombre", "problema": "El nombre no puede estar vacío" },
+    { "campo": "precio_hora", "problema": "El precio debe ser mayor a 0" }
+  ]
+}
+```
+
+<ResponseField name="ok" type="boolean">
+  Always `false` on a validation failure.
+</ResponseField>
+
+<ResponseField name="mensaje" type="string">
+  Always `"Datos de entrada inválidos"` for Zod errors.
+</ResponseField>
+
+<ResponseField name="errores" type="array">
+  <Expandable title="Error item fields">
+    <ResponseField name="campo" type="string">
+      Dot-notation path of the invalid field (e.g. `"nombre"`, `"precio_hora"`).
+    </ResponseField>
+    <ResponseField name="problema" type="string">
+      Human-readable description of the validation failure.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error codes
+
+| Code | Meaning |
+|------|---------|
+| `401` | Missing or invalid Bearer token |
+| `422` | Request body failed Zod schema validation |
+| `500` | Internal server error |
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Reservations API" icon="calendar" href="api/reservas">
+    Book a court for a specific date and time slot. Includes overlap conflict detection.
+  </Card>
+  <Card title="API Overview" icon="map" href="api/overview">
+    All PitchPro endpoints at a glance with base URL, auth format, and error conventions.
+  </Card>
+</CardGroup>
+
+<CardGroup cols={2}>
+  <Card title="Authentication Guide" icon="key" href="api/authentication">
+    Learn how to obtain and refresh Bearer tokens to authenticate all court requests.
+  </Card>
+</CardGroup>

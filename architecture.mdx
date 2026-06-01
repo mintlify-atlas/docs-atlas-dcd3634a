@@ -1,0 +1,206 @@
+---
+title: "PitchPro System Architecture and Data Model"
+sidebarTitle: "Architecture"
+description: "Explore how PitchPro's Express backend and React frontend interact, the PostgreSQL schema, and the JWT authentication flow."
+---
+
+PitchPro follows a classic **two-tier architecture**: a stateless REST API (the backend) and a Single Page Application (the frontend) that communicate exclusively over HTTP/JSON. The Express server at port `8000` owns all business logic and data persistence, while the React SPA at port `5173` handles rendering and user interaction. Every request from the frontend carries a JWT Bearer token in the `Authorization` header; the backend's `verifyToken` middleware validates it before any route handler executes. Neither tier shares code or process space — they are independently deployable projects.
+
+## Project structure
+
+```bash
+Final-lenguaje-Avanzado/
+│
+├── arquimarket/                        # Backend — Express + TypeScript
+│   └── src/
+│       ├── main.ts                     # App bootstrap: middleware, routes, server start
+│       ├── swagger.ts                  # OpenAPI 3.0 document (served at /docs)
+│       ├── db/
+│       │   ├── connection.ts           # pg Pool configuration (reads DB_* env vars)
+│       │   ├── init.ts                 # CREATE TABLE IF NOT EXISTS for all three tables
+│       │   └── seed.ts                 # Inserts 20 canchas + 20 reservas sample rows
+│       ├── middlewares/
+│       │   └── verifyToken.ts          # JWT Bearer token guard (used on /api/canchas & /api/reservas)
+│       └── modules/
+│           ├── auth/
+│           │   ├── auth.controller.ts  # Routes: /register /login /refresh /logout /me
+│           │   └── auth.validator.ts   # express-validator rules for register + login
+│           ├── canchas/
+│           │   ├── canchas.controller.ts   # GET / | GET /:id | POST /
+│           │   ├── canchas.service.ts      # Business logic + CanchaNoEncontradaError
+│           │   ├── canchas.repository.ts   # Raw SQL queries via pg Pool
+│           │   └── canchas.types.ts        # Cancha type + CrearCanchaSchema (Zod)
+│           └── reservas/
+│               ├── reservas.controller.ts  # GET / | POST / (with overlap check)
+│               ├── reservas.repository.ts  # findAll, create, existeSolapamiento
+│               └── reservas.types.ts       # Reserva type + CrearReservaSchema (Zod)
+│
+└── starter-vite-ts/                    # Frontend — React + Vite + MUI
+    └── src/
+        ├── api/
+        │   ├── canchas.ts              # canchasApi: list / details / create / health
+        │   └── reservas.ts             # reservasApi: list / create
+        ├── auth/
+        │   ├── context/jwt/            # JwtAuthProvider, auth context, token utils
+        │   └── guard/                  # AuthGuard, GuestGuard, RoleBasedGuard
+        ├── features/
+        │   └── dashboard/
+        │       └── components/         # Reusable dashboard widgets
+        ├── hooks/                      # Custom React hooks (e.g. useResponsive)
+        └── sections/
+            └── pitchpro/               # PitchPro-specific UI sections (courts, bookings views)
+```
+
+## Database schema
+
+The three tables are created at startup by `initDatabase()` in `arquimarket/src/db/init.ts`. All timestamps use `TIMESTAMPTZ` (timezone-aware). The schema intentionally keeps the model lean — no migrations library is used; `CREATE TABLE IF NOT EXISTS` is idempotent.
+
+```sql
+-- ─────────────────────────────────────────────────
+-- canchas: available sport courts
+-- ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS canchas (
+  id          SERIAL PRIMARY KEY,
+  nombre      VARCHAR(100)   NOT NULL,
+  descripcion TEXT,
+  precio_hora DECIMAL(10, 2) NOT NULL,
+  activa      BOOLEAN        DEFAULT true,
+  created_at  TIMESTAMPTZ    DEFAULT NOW()
+);
+
+-- ─────────────────────────────────────────────────
+-- reservas: time-slot bookings per court
+-- ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS reservas (
+  id             SERIAL PRIMARY KEY,
+  cancha_id      INTEGER        NOT NULL REFERENCES canchas(id),
+  fecha          DATE           NOT NULL,
+  hora_inicio    TIME           NOT NULL,
+  hora_fin       TIME           NOT NULL,
+  nombre_cliente VARCHAR(255)   NOT NULL,
+  telefono       VARCHAR(20)    NOT NULL,
+  estado         VARCHAR(20)    DEFAULT 'pendiente',
+  origen         VARCHAR(20)    DEFAULT 'interfaz',
+  created_at     TIMESTAMPTZ    DEFAULT NOW(),
+  CONSTRAINT estado_valido CHECK (estado IN ('pendiente','confirmada','cancelada')),
+  CONSTRAINT origen_valido CHECK (origen IN ('whatsapp','interfaz')),
+  CONSTRAINT hora_valida   CHECK (hora_fin > hora_inicio)
+);
+
+-- ─────────────────────────────────────────────────
+-- users: registered accounts for authentication
+-- ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS users (
+  id            SERIAL PRIMARY KEY,
+  nombre        VARCHAR(100) NOT NULL,
+  email         VARCHAR(255) UNIQUE NOT NULL,
+  password      VARCHAR(255) NOT NULL,
+  refresh_token TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**Key constraints explained:**
+
+| Constraint | Table | Rule |
+|---|---|---|
+| `REFERENCES canchas(id)` | `reservas.cancha_id` | Foreign key — PostgreSQL rejects a booking that references a non-existent court. |
+| `CONSTRAINT estado_valido` | `reservas.estado` | Allowed values: `pendiente`, `confirmada`, `cancelada`. Any other string causes the INSERT/UPDATE to fail at the database level. |
+| `CONSTRAINT origen_valido` | `reservas.origen` | Allowed values: `whatsapp`, `interfaz`. Captures whether the booking was made via the web dashboard or an external channel. |
+| `CONSTRAINT hora_valida` | `reservas.hora_fin` | Enforces `hora_fin > hora_inicio` — it is impossible to persist a booking where the end time is before or equal to the start time. |
+| `UNIQUE` | `users.email` | One account per email address. The registration route also checks for duplicates at the application layer before the DB constraint fires. |
+
+<Note>
+  In addition to the database-level `CHECK` constraints, all incoming request bodies are validated by **Zod schemas** (`CrearCanchaSchema`, `CrearReservaSchema`) in the controller layer before any SQL is executed. If Zod fails, a `422` (canchas) or `400` (reservas) is returned immediately, without touching the database.
+</Note>
+
+## Request lifecycle
+
+The following steps describe the full journey of an **authenticated** request — for example, `GET /api/canchas` from the React dashboard.
+
+<Steps>
+  <Step title="Axios interceptor injects the Bearer token">
+    The frontend Axios instance reads `sessionStorage.getItem('accessToken')` and attaches it to every outgoing request as:
+    ```
+    Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+    ```
+    This happens transparently — components call `canchasApi.list()` with no knowledge of the header.
+  </Step>
+
+  <Step title="CORS middleware validates the origin">
+    Express runs `cors()` as the first middleware. For local development, all origins are accepted. In production this should be restricted to the frontend's domain.
+  </Step>
+
+  <Step title="verifyToken middleware validates the JWT">
+    `verifyToken` (mounted in `main.ts` before the route handler) reads the `Authorization` header, splits on `' '` to extract the raw token, and calls `jwt.verify(token, JWT_SECRET)`. If the token is absent, malformed, or expired, the middleware immediately returns:
+    ```json
+    { "message": "Token inválido o expirado" }
+    ```
+    with HTTP `401`. The route handler never runs.
+
+    On success, the decoded payload (`{ id, email, iat, exp }`) is attached to `req.user` for downstream use.
+  </Step>
+
+  <Step title="Route handler executes business logic">
+    Control passes to the matching controller function (e.g. `canchasRouter.get('/')`). The controller may call a **service** method, which in turn delegates to a **repository** method that issues parameterised SQL against the PostgreSQL pool.
+  </Step>
+
+  <Step title="PostgreSQL executes the query and returns rows">
+    The `pg` Pool maintains a connection pool to the database. The repository receives the result rows, the service applies any domain logic (e.g. throwing `CanchaNoEncontradaError` for a 404), and the controller serialises the response as JSON.
+  </Step>
+
+  <Step title="Response travels back to the frontend">
+    The JSON response is returned to Axios. TanStack Query caches the result and delivers it to the React component, triggering a re-render with the fresh data.
+  </Step>
+</Steps>
+
+## Authentication tokens
+
+PitchPro uses a **dual-token** JWT strategy: a short-lived access token for API authorization and a long-lived refresh token for silent renewal. Both are signed with HS256.
+
+| Token | Expiry | Secret env var | Payload | Storage |
+|-------|--------|---------------|---------|---------|
+| **Access token** | 15 minutes | `JWT_SECRET` | `{ id, email }` | `sessionStorage` (key: `accessToken`) — cleared when the browser tab closes |
+| **Refresh token** | 7 days | `JWT_REFRESH_SECRET` | `{ id }` | PostgreSQL `users.refresh_token` column (server-side) and returned in the login response body |
+
+**Token lifecycle:**
+
+1. **Login** (`POST /api/auth/login`) — Bcrypt verifies the password, then both tokens are generated. The refresh token is persisted to `users.refresh_token` in the database and also returned in the response body so the client can store it.
+2. **API calls** — The access token is sent as `Authorization: Bearer <token>` on every protected request.
+3. **Refresh** (`POST /api/auth/refresh`) — The client sends the refresh token; the server verifies it against both the signature and the stored value in the DB, then issues a new access token.
+4. **Logout** (`POST /api/auth/logout`) — The server sets `users.refresh_token = NULL`, invalidating the refresh token immediately. The client should also discard its stored tokens.
+
+## Module layout
+
+The backend follows a three-layer **controller → service → repository** pattern for the `canchas` and `reservas` modules:
+
+```
+canchas.controller.ts   ← HTTP layer: parse request, call service, return JSON
+      │
+canchas.service.ts      ← Domain layer: business rules, custom errors (CanchaNoEncontradaError)
+      │
+canchas.repository.ts   ← Data layer: parameterised SQL via pg Pool, returns typed rows
+```
+
+**Why this separation matters:**
+
+- **Controller** handles only HTTP concerns (status codes, request parsing, Zod validation). It never touches `pg` directly.
+- **Service** encapsulates rules like "a booking cannot reference a non-existent court" or throwing a typed `CanchaNoEncontradaError` so the controller can map it to a `404` without checking raw DB results.
+- **Repository** issues raw SQL and returns typed TypeScript objects. Swapping the database engine only requires changing this layer.
+
+The `reservas` module omits a dedicated service file — overlap detection (`existeSolapamiento`) lives directly in the repository, and the controller imports `canchasService` to validate that the referenced court exists before creating a booking.
+
+<CardGroup cols={2}>
+  <Card title="Backend Authentication" icon="lock" href="backend/authentication">
+    Deep dive into the JWT implementation, bcrypt rounds, and token rotation strategy.
+  </Card>
+  <Card title="API Overview" icon="code" href="api/overview">
+    Full endpoint reference with request bodies, response shapes, and error codes.
+  </Card>
+  <Card title="Database Guide" icon="database" href="backend/database">
+    PostgreSQL connection pool configuration, migration approach, and the seed script.
+  </Card>
+  <Card title="Canchas API" icon="futbol" href="api/canchas">
+    List, retrieve, and create sport courts — request/response examples and Zod schema.
+  </Card>
+</CardGroup>
